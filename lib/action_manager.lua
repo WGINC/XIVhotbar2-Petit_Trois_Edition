@@ -526,6 +526,12 @@ function meets_spell_level_req(spell_name_en)
     return true -- Spell does not exist, but assume true, might be new patch data
   end
 
+  -- If the game client says the character knows this spell, trust it.
+  -- This handles JP gifts (e.g. Refresh III), spells with stale level data, etc.
+  if windower.ffxi.get_spells()[spell_id] == true then
+    return true
+  end
+
   -- Retrieve the spell data
   local spell_data = resources.spells[spell_id]
   if not spell_data then
@@ -684,7 +690,10 @@ function meets_weaponskill_level_req(weaponskill_name_en)
 end
 
 function is_spell_learned(spell_name_en)
-  return learned_spells_name[spell_name_en] == true
+  if learned_spells_name[spell_name_en] == true then return true end
+  -- Fallback: check game client directly for spells absent from priv_res (e.g. T5 nukes, JP gifts)
+  local spell_id = en_to_spell_id[spell_name_en]
+  return spell_id ~= nil and windower.ffxi.get_spells()[spell_id] == true
 end
 
 -- ONLY USED TO CHECK IF SPELL IS GREYED OUT
@@ -762,7 +771,12 @@ function is_spell_usable_by_a_job(spell, player)
   end
 
   -- Check main job and sub job
-  return can_cast(main_job_id, main_job_level) or can_cast(sub_job_id, sub_job_level)
+  if can_cast(main_job_id, main_job_level) or can_cast(sub_job_id, sub_job_level) then
+    return true
+  end
+  -- Fallback: trust game client for spells with missing/stale level data (e.g. JP gifts, T5 nukes)
+  local spell_id = en_to_spell_id[spell['en']]
+  return spell_id ~= nil and windower.ffxi.get_spells()[spell_id] == true
 end
 
 function is_job_ability_learned(ability_name_en)
