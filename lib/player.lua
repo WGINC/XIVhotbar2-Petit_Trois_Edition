@@ -97,7 +97,11 @@ function player:initialize(windower_player, server, theme_options)
 end
 
 function player:remove_action(remove_table)
-  action_manager:remove_action(self, remove_table)
+  return action_manager:remove_action(self, remove_table)
+end
+
+function player:clear_slot(row, slot)
+  return action_manager:clear_slot(row, slot)
 end
 
 -- update player jobs
@@ -279,7 +283,7 @@ function player:change_active_hotbar(new_hotbar)
 end
 
 function player:insert_action(args)
-  action_manager:insert_action(player.sub_job, args)
+  return action_manager:insert_action(player.sub_job, args)
 end
 
 function player:determine_summoner_id(pet_name)

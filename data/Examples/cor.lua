@@ -155,15 +155,17 @@ xivhotbar_keybinds_job['Base'] = {
   -- {'battle 3 8', 'ja', "Avenger's Roll", 'me', 'AVG','classes/blu'}, -- countering
 	{'b 7 11', 'ma', 'Zeid II', 'me', 'ZedII'},
 	{'b 7 10', 'ma', 'Yoran-Oran (UC)', 'me', 'Yorn-O'},
-	{'b 7 9', 'ma', 'Valaineral', 'me', 'Valn'},
 	{'b 7 12', 'ma', 'Shantotto II', 'me', 'ShanII'},
 	{'b 7 2', 'ma', 'Aeroga', 't', 'Aerg'},
 	{'b 7 3', 'ma', 'Waterga', 't', 'Watr'},
 	{'b 7 4', 'ma', 'Firaga', 't', 'Firg'},
 	{'b 7 5', 'ma', 'Blizzaga', 't', 'Bliz'},
-	{'b 7 6', 'ma', 'Thundaga', 't', 'Thun'},
-	{'b 1 1', 'ma', 'Quake', 't', 'Quk'},
 	{'b 6 1', 'ja', "Corsair's Roll", 'me', "COR"},
+	{'b 7 1', 'ma', "Stonega", 't', "Ston"},
+	{'b 7 7', 'ma', "Poisonga", 't', "Posn"},
+	{'b 7 9', 'ma', "Valaineral", 'me', "Valn"},
+	{'b 7 6', 'ma', "Thundaga", 't', "Thun"},
+	{'b 7 8', 'ma', "Poison", 't', "Posn"},
 }
 
 -- SUBJOBS

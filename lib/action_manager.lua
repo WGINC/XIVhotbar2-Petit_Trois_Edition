@@ -40,6 +40,15 @@ local abilities = {}    -- populated after binds are parsed
 local weaponskills = {} -- populated after binds are parsed
 
 local action_manager = {}
+
+-- Debug logging: gated on //htb debug (ui.theme.dev_mode). ui is a global
+-- (required without 'local' in xivhotbar2.lua) so it's visible here too.
+local function dbg(msg)
+  if ui and ui.theme and ui.theme.dev_mode then
+    log('[AM] ' .. msg)
+  end
+end
+
 local mainjob_actions = {}
 local subjob_actions = {}
 local petname_actions = {}
@@ -237,7 +246,7 @@ function action_manager:build(type, action, target, alias, icon)
 end
 
 -- add given action to a hotbar
-local function add_action(am, action, environment, hotbar, slot)
+local function add_action(am, action, environment, hotbar, slot, source)
   status = true
   if environment == 'b' then environment = 'battle' elseif environment == 'f' then environment = 'field' end
   --if slot == 10 then slot = 0 end
@@ -259,6 +268,18 @@ local function add_action(am, action, environment, hotbar, slot)
       status = false
     end
 
+    -- mainjob/subjob/petname/stance/weaponskill/general are merged into the same am.hotbar
+    -- with no protection against two of them claiming the same row/slot -- this is by design:
+    -- subjob entries are meant to be able to override a mainjob default at a shared position
+    -- (e.g. showing the subjob's version of something in the same slot when that subjob is
+    -- active). Last-source-wins is correct; what was missing was visibility into when it
+    -- happens, so it's logged here without changing the outcome.
+    local existing = am.hotbar[environment]['hotbar_' .. hotbar]['slot_' .. slot]
+    if existing and existing.action and existing.action ~= action.action then
+      dbg(string.format('add_action: OVERWRITE %s %s/%s -- "%s" (from %s) replaced by "%s" (from %s)',
+        environment, hotbar, slot, existing.action, existing._source or '?', action.action, source or '?'))
+    end
+
     if action.type == 'autoitem' then
       -- AUTO ITEM is the only type of action that gets loaded at runtime, as opposed to at parse time,
       -- due to the dynamic nature of detecting the items.
@@ -271,7 +292,8 @@ local function add_action(am, action, environment, hotbar, slot)
           type = 'item',
           target = item.target,
           icon = action.icon,
-          action = item.name
+          action = item.name,
+          _source = source,
         }
 
         am.hotbar[environment]['hotbar_' .. hotbar]['slot_' .. slot] = new_action
@@ -280,9 +302,36 @@ local function add_action(am, action, environment, hotbar, slot)
         am.hotbar[environment]['hotbar_' .. hotbar]['slot_' .. slot] = nil
       end
     else
+      action._source = source
       am.hotbar[environment]['hotbar_' .. hotbar]['slot_' .. slot] = action
     end
   end
+end
+
+-- Used by //htb clear / //htb delete (aliases of each other). Unlike remove_action, this
+-- doesn't trust the in-memory occupied check -- it clears memory if something's there, AND
+-- always scrubs the file by position, so a slot that's "memory-empty but file-occupied"
+-- (e.g. an action that fails action_req_check for your current job) actually gets wiped
+-- instead of being reported as already empty.
+function action_manager:clear_slot(row, slot)
+  local env = self.hotbar_settings.active_environment
+  local env_short = (env == 'field') and 'f' or 'b'
+  local existing = self.hotbar[env]['hotbar_' .. row] and self.hotbar[env]['hotbar_' .. row]['slot_' .. slot]
+
+  local memory_cleared = false
+  if existing ~= nil then
+    dbg(string.format('clear_slot: clearing "%s" from %s %d %d (memory)', existing.action, env, row, slot))
+    self.hotbar[env]['hotbar_' .. row]['slot_' .. slot] = nil
+    memory_cleared = true
+  end
+
+  local file_cleared = file_manager:clear_slot(row, slot, env_short)
+
+  if not memory_cleared and not file_cleared then
+    dbg(string.format('clear_slot: %s %d %d was already empty in both memory and file', env, row, slot))
+  end
+
+  return memory_cleared or file_cleared
 end
 
 local function reindex_action_table(actions_table)
@@ -398,6 +447,7 @@ function action_req_check(action_array)
   -- Ensure spell meets level requirements and is learned, if applicable.
   if action_type == 'ma' then
     if not meets_spell_level_req(action_name) then
+      dbg(string.format('action_req_check: REJECT "%s" (ma) at %s -- level requirement not met', action_name, slot))
       return false
     end
 
@@ -415,33 +465,51 @@ function action_req_check(action_array)
       -- the unlearned yet learnable one, if nothing else was in this slot, then no harm in putting
       -- the unlearned one here as a placeholder with the scroll icon.
       if last_eligible_spell then
+        dbg(string.format('action_req_check: REJECT "%s" (ma) at %s -- not learned, and "%s" already has this slot',
+          action_name, slot, last_eligible_spell))
         return false
       else
+        dbg(string.format('action_req_check: ACCEPT "%s" (ma) at %s as not-learned placeholder (scroll icon)', action_name, slot))
         return true
       end
     end
   elseif action_type == 'ja' then
     if not meets_ability_level_req(action_name) then
+      dbg(string.format('action_req_check: REJECT "%s" (ja) at %s -- level requirement not met', action_name, slot))
       return false
     end
 
     -- Check if job ability is learned.
-    return is_job_ability_learned(action_name)
+    local learned = is_job_ability_learned(action_name)
+    if not learned then
+      dbg(string.format('action_req_check: REJECT "%s" (ja) at %s -- not learned', action_name, slot))
+    end
+    return learned
   elseif action_type == 'bstpet' then
     -- Check if Beastmaster pet ability is usable.
-    return is_pet_ability_usable(action_name)
+    local usable = is_pet_ability_usable(action_name)
+    if not usable then
+      dbg(string.format('action_req_check: REJECT "%s" (bstpet) at %s -- index out of range', tostring(action_name), slot))
+    end
+    return usable
   elseif action_type == 'ws' then
     if not meets_weaponskill_level_req(action_name) then
+      dbg(string.format('action_req_check: REJECT "%s" (ws) at %s -- level/skill requirement not met', action_name, slot))
       return false
     end
 
     -- Check if weapon skill is learned.
-    return is_weaponskill_learned(action_name)
+    local learned = is_weaponskill_learned(action_name)
+    if not learned then
+      dbg(string.format('action_req_check: REJECT "%s" (ws) at %s -- not learned', action_name, slot))
+    end
+    return learned
   elseif action_type == 'ct' or action_type == 'pet' or action_type == 'input' or action_type == 'macro' or action_type == 'gs' or action_type == 'autoitem' then
     -- Always allow these action types.
     return true
   else
     -- Reject unrecognized action types.
+    dbg(string.format('action_req_check: REJECT "%s" at %s -- unrecognized action type "%s"', tostring(action_name), tostring(slot), tostring(action_type)))
     return false
   end
 end
@@ -582,6 +650,8 @@ function meets_weaponskill_level_req(weaponskill_name_en)
 
   -- Check if player meets the minimum level requirement (if applicable)
   if min_level and main_job_level < min_level then
+    dbg(string.format('meets_weaponskill_level_req: "%s" REJECTED -- main job level %d < required %d',
+      weaponskill_name_en, main_job_level, min_level))
     return false
   end
 
@@ -595,6 +665,8 @@ function meets_weaponskill_level_req(weaponskill_name_en)
   end
 
   if not skill_name then
+    dbg(string.format('meets_weaponskill_level_req: "%s" REJECTED -- could not map skill "%s" to a known skill key',
+      weaponskill_name_en, tostring(resources.skills[skill_data.skill] and resources.skills[skill_data.skill].en)))
     return false
   end
 
@@ -602,6 +674,8 @@ function meets_weaponskill_level_req(weaponskill_name_en)
 
   -- Check if player meets the minimum skill requirement
   if min_skill and player_skill < min_skill then
+    dbg(string.format('meets_weaponskill_level_req: "%s" REJECTED -- %s skill %d < required %d',
+      weaponskill_name_en, skill_name, player_skill, min_skill))
     return false
   end
 
@@ -755,6 +829,11 @@ function is_weaponskill_learned(ws_name_en)
       return false
     end
   end
+  -- ws_name_en didn't match anything in ws_list at all (typo, formatting mismatch, etc.)
+  -- Previously fell through and returned nil here, which action_req_check treats the
+  -- same as false, but silently -- nothing told you *why* the row got dropped.
+  dbg(string.format('is_weaponskill_learned: "%s" not found in ws_list -- row will be rejected', tostring(ws_name_en)))
+  return false
 end
 
 local function parse_binds(theme_options, player, job_root)
@@ -989,16 +1068,29 @@ end
 function action_manager:remove_action(player, remove_table)
   local row = remove_table.source.row
   local slot = remove_table.source.slot
+  local env = self.hotbar_settings.active_environment
 
-  if self.hotbar_settings.active_environment == 'battle' then
-    if (self.hotbar['battle']['hotbar_' .. row]['slot_' .. slot] ~= nil) then
-      file_manager:write_remove(self.hotbar['battle']['hotbar_' .. row]['slot_' .. slot], row, slot, 'b')
+  if env == 'battle' then
+    local existing = self.hotbar['battle']['hotbar_' .. row]['slot_' .. slot]
+    if (existing ~= nil) then
+      dbg(string.format('remove_action: removing "%s" from battle %d %d', existing.action, row, slot))
+      local ok = file_manager:write_remove(existing, row, slot, 'b')
       self.hotbar['battle']['hotbar_' .. row]['slot_' .. slot] = nil
+      return ok
+    else
+      dbg(string.format('remove_action: battle %d %d already empty in memory, nothing to remove', row, slot))
+      return true
     end
   else
-    if (self.hotbar['battle']['hotbar_' .. row]['slot_' .. slot] ~= nil) then
-      file_manager:write_remove(self.hotbar['field']['hotbar_' .. row]['slot_' .. slot], row, slot, 'f')
+    local existing = self.hotbar['field']['hotbar_' .. row]['slot_' .. slot]
+    if (existing ~= nil) then
+      dbg(string.format('remove_action: removing "%s" from field %d %d', existing.action, row, slot))
+      local ok = file_manager:write_remove(existing, row, slot, 'f')
       self.hotbar['field']['hotbar_' .. row]['slot_' .. slot] = nil
+      return ok
+    else
+      dbg(string.format('remove_action: field %d %d already empty in memory, nothing to remove', row, slot))
+      return true
     end
   end
 end
@@ -1007,7 +1099,7 @@ function action_manager:insert_action(player_subjob, args)
   if not args[6] then
     print(
       'XIVHOTBAR2: Invalid arguments: set <mode> <hotbar> <slot> <action_type> <action> <target (optional)> <alias (optional)> <icon (optional)>')
-    return
+    return false
   end
   local prio = args[1]:lower()
   local row = tonumber(args[2]) or 0
@@ -1024,14 +1116,17 @@ function action_manager:insert_action(player_subjob, args)
 
   local new_action = action_manager:build(action_type, action, target, alias, icon)
 
-  file_manager:insert_action(new_action, prio, player_subjob, environment_to_send(), row, slot)
+  dbg(string.format('insert_action: prio=%s env=%s row=%d slot=%d type=%s action="%s" target=%s',
+    prio, environment_to_send(), row, slot, action_type, action, tostring(target)))
+
+  return file_manager:insert_action(new_action, prio, player_subjob, environment_to_send(), row, slot)
 end
 
 function action_manager:update_file_path(player_name, player_job)
   file_manager:update_file_path(player_name, player_job)
 end
 
-function action_manager:add_actions(action_table)
+function action_manager:add_actions(action_table, source)
   for key in pairs(action_table.environment) do
     add_action(self,
       action_manager:build(
@@ -1043,7 +1138,8 @@ function action_manager:add_actions(action_table)
       ),
       action_table.environment[key],
       action_table.hotbar[key],
-      action_table.slot[key]
+      action_table.slot[key],
+      source
     )
   end
 end
@@ -1100,17 +1196,17 @@ function action_manager:load(player)
     parse_binds(self.theme_options, player, job_root)
 
     --ADD Actions for all stances
-    action_manager:add_actions(mainjob_actions)
+    action_manager:add_actions(mainjob_actions, 'mainjob')
     if (subjob_actions.environment ~= nil) then
-      action_manager:add_actions(subjob_actions)
+      action_manager:add_actions(subjob_actions, 'subjob')
     end
     if (petname_actions.environment ~= nil) then
-      action_manager:add_actions(petname_actions)
+      action_manager:add_actions(petname_actions, 'petname')
     end
     if (stance_actions.environment ~= nil) then
-      action_manager:add_actions(stance_actions)
+      action_manager:add_actions(stance_actions, 'stance')
     end
-    action_manager:add_actions(weaponskill_actions)
+    action_manager:add_actions(weaponskill_actions, 'weaponskill')
   end
 
   if general_file == nil then
@@ -1128,7 +1224,7 @@ function action_manager:load(player)
         'Root'
     parse_general_binds(general_root)
 
-    action_manager:add_actions(general_actions)
+    action_manager:add_actions(general_actions, 'general')
   end
 end
 

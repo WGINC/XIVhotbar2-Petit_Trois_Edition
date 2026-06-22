@@ -65,31 +65,35 @@ first_0x050 = false
 
 
 -- Addon Dependencies --
-htb_skillchains = require('lib/skillchains')
-htb_bloodpacts = require('lib/bloodpacts')
-htb_blue_spells = require('lib/blue_spells')
+htb_skillchains       = require('lib/skillchains')
+htb_bloodpacts        = require('lib/bloodpacts')
+htb_blue_spells       = require('lib/blue_spells')
 
-player = require('lib/player')
-ui = require('lib/ui')
+player                = require('lib/player')
+ui                    = require('lib/ui')
 
-local keyboard = require('lib/keyboard_mapper')
+local keyboard        = require('lib/keyboard_mapper')
 
-local move_box = require('lib/move_box')
+local move_box        = require('lib/move_box')
+local move_box        = require('lib/move_box')
+local utility_gauges  = require('lib/utility_gauges')
 
-local state = {
+local last_job_key    = '' -- tracks job combo to avoid redundant gauge rebuilds
+
+local state           = {
   ready = false,
   demo = false,
   inventory_ready = false,
   inventory_loading = false
 }
 
-local loaded = windower.ffxi.get_info().logged_in
+local loaded          = windower.ffxi.get_info().logged_in
 local first_load_done = false
 
 -------
 -- Main
 -------
-nil_equip_bool = false
+nil_equip_bool        = false
 
 -- initialize addon --
 function initialize()
@@ -181,7 +185,19 @@ end
 function reload_hotbar(using_pet_name)
   if ui.theme.dev_mode then log("Reloading Hotbar.") end
 
-  coroutine.sleep(1)
+  -- NOTE: this used to start with coroutine.sleep(1). That sleep ran inside
+  -- the 'mouse' event coroutine whenever reload_hotbar() was called from a
+  -- mouse-driven path (e.g. dropping an action from the action picker onto
+  -- a hotbar slot). While that coroutine was suspended, this function had
+  -- not yet returned, so every mouse event Windower fired in that 1-second
+  -- window re-entered the handler fresh. If one of those stray events
+  -- happened to land on the lock button, it would call toggle_edit_mode(),
+  -- silently turning off edit mode (and closing the action picker) mid-drag.
+  -- That is exactly why copying actions to the bar would stop working
+  -- after repeated use: edit mode had quietly been switched off. The two
+  -- call sites that genuinely need a delay (blue magic settling, pet death)
+  -- already issue their own explicit coroutine.sleep() before calling this
+  -- function, so no caller depends on the sleep being here.
 
   -- the pet name tends to be unreliable, so we pass it in as a param when possible
   local pet_name = using_pet_name or ''
@@ -211,6 +227,24 @@ function reload_hotbar(using_pet_name)
 
   player:load_hotbar()
   ui:load_player_hotbar(player:get_hotbar_info())
+
+  -- Rebuild gauges only when the job combination actually changes
+  local job_key = tostring(player.main_job_id) .. '_' .. tostring(player.sub_job_id)
+  if job_key ~= last_job_key then
+    last_job_key = job_key
+    local def_x, def_y = 50, 50
+    if ui.lock_panel then
+      def_x = ui.lock_panel.x
+      def_y = ui.lock_panel.y + ui.image_height + 6
+    end
+    utility_gauges:setup(player, settings, def_x, def_y)
+    -- If already in edit mode when job changes trigger a new setup(),
+    -- the freshly-created panels start with edit_mode=false and
+    -- set_edit_mode(true) was never called on them.  Sync here.
+    if state.demo then
+      utility_gauges:set_edit_mode(true)
+    end
+  end
 end
 
 -- change active hotbar --
@@ -272,21 +306,27 @@ end
 local function toggle_edit_mode()
   state.demo = not state.demo
   if state.demo then
-    log("Layout mode enabled! Drag slot icons to swap actions. Drag between rows to reposition bars. Click the unlock button (or //htb move) to save and exit.")
+    log(
+      "Layout mode enabled! Drag slot icons to swap actions. Drag between rows to reposition bars. Click the unlock button (or //htb move) to save and exit.")
     print('XIVHOTBAR2: Layout mode enabled')
     move_box:enable()
     ui:update_edit_button(true)
     if ui.lock_panel then ui.lock_panel:set_edit_mode(true) end
+    utility_gauges:set_edit_mode(true)
     -- Open the action picker anchored to bar 1 slot 1
     local bx, by = ui:get_slot_xy(1, 1)
     ui.action_picker:open(bx, by, settings)
   else
     -- Save lock panel position before writing settings
     if ui.lock_panel then
+      settings.Utility = settings.Utility or {}
+      settings.Utility.LockButton = settings.Utility.LockButton or {}
       settings.Utility.LockButton.OffsetX = ui.lock_panel.x
       settings.Utility.LockButton.OffsetY = ui.lock_panel.y
       ui.lock_panel:set_edit_mode(false)
     end
+    utility_gauges:set_edit_mode(false)
+    utility_gauges:save_positions(settings)
     save_all_hotbars()
     print('XIVHOTBAR2: Layout mode disabled, writing new positions to settings.xml.')
     move_box:disable()
@@ -301,6 +341,10 @@ local function print_help()
   log("move: Enables moving the hotbars by dragging them, also writes the changes to settings.xml if used again.")
   log("reload: Reloads the hotbar, if you have made changes to the hotbar-file, this is faster for loading.")
   log("mount: either dismounts if mounted, or mounts the indicated mount")
+  log(
+    "clear/delete <row> <slot>: scrubs a slot from memory and file, regardless of whether it currently shows as occupied. clear and delete are aliases.")
+  log(
+    "debug <on|off>: toggles verbose logging of every action-picker drag, drop, file write, swap/remove, and load-time table merge, for diagnosing why an action won't take or shows wrong. Omit on/off to toggle.")
 end
 
 -- ON COMMAND --
@@ -311,6 +355,22 @@ windower.register_event('addon command', function(command, ...)
   if command == 'reload' then
     if ui.theme.dev_mode then log('Reloading Hotbar.') end
     reload_hotbar()
+  elseif command == 'debug' then
+    local arg = args[1] and args[1]:lower() or nil
+    local new_value
+    if arg == 'on' then
+      new_value = true
+    elseif arg == 'off' then
+      new_value = false
+    else
+      new_value = not ui.theme.dev_mode
+    end
+    ui.theme.dev_mode = new_value    -- shared theme_options table: action_manager, file_manager,
+    settings.Dev.DevMode = new_value -- action_picker, and ui.lua all see this immediately
+    config.save(settings)
+    print(string.format(
+      'XIVHOTBAR2: Debug logging %s. Try the drag/drop or move you were testing and watch the console.',
+      new_value and 'ENABLED' or 'disabled'))
   elseif command == 'help' then
     print_help()
   elseif command == 'mount' then
@@ -335,15 +395,14 @@ windower.register_event('addon command', function(command, ...)
     end
   elseif command == 'move' then
     toggle_edit_mode()
-
   elseif command == 'hide' then
     ui.hotbar.hide_hotbars = true
     ui:hide()
-
+    utility_gauges:hide_all()
   elseif command == 'show' then
     ui.hotbar.hide_hotbars = false
     ui:show(player:get_hotbar_info())
-
+    utility_gauges:show_all()
   elseif command == 'set' then
     -- //htb set <row> <slot> <type> <action> [target] [alias]
     -- Use underscores for spaces in multi-word names: Cure_IV, Phantom_Roll
@@ -364,7 +423,7 @@ windower.register_event('addon command', function(command, ...)
       -- Remove any existing action at that slot
       local hotbar, env = player:get_hotbar_info_without_vitals()
       if hotbar[env]['hotbar_' .. row] and
-         hotbar[env]['hotbar_' .. row]['slot_' .. slot] ~= nil then
+          hotbar[env]['hotbar_' .. row]['slot_' .. slot] ~= nil then
         player:remove_action({ source = { row = row, slot = slot } })
       end
       -- Write to job file if it exists, otherwise general file
@@ -373,33 +432,30 @@ windower.register_event('addon command', function(command, ...)
       local prio = jf and 'm' or 'g'
       if jf then jf:close() end
       player:insert_action({ prio, tostring(row), tostring(slot),
-                              atype, action, target, alias })
+        atype, action, target, alias })
       player:load_hotbar()
       ui:load_player_hotbar(player:get_hotbar_info())
       windower.add_to_chat(8, string.format(
         '[XIVHotbar2] Row %d Slot %d -> %s "%s" <%s>  label: %s',
         row, slot, atype, action, target, alias))
     end
-
-  elseif command == 'clear' then
-    -- //htb clear <row> <slot>  -- remove the action from a slot
+  elseif command == 'clear' or command == 'delete' then
+    -- //htb clear <row> <slot>  (delete is an alias) -- scrub a slot from memory AND file,
+    -- regardless of whether memory currently thinks it's occupied.
     local row  = tonumber(args[1])
     local slot = tonumber(args[2])
     if not (row and slot) then
-      windower.add_to_chat(8, '[XIVHotbar2] Usage: //htb clear <row> <slot>')
+      windower.add_to_chat(8, string.format('[XIVHotbar2] Usage: //htb %s <row> <slot>', command))
     else
-      local hotbar, env = player:get_hotbar_info_without_vitals()
-      if hotbar[env]['hotbar_' .. row] and
-         hotbar[env]['hotbar_' .. row]['slot_' .. slot] ~= nil then
-        player:remove_action({ source = { row = row, slot = slot } })
-        player:load_hotbar()
-        ui:load_player_hotbar(player:get_hotbar_info())
+      local cleared = player:clear_slot(row, slot)
+      player:load_hotbar()
+      ui:load_player_hotbar(player:get_hotbar_info())
+      if cleared then
         windower.add_to_chat(8, string.format('[XIVHotbar2] Cleared row %d slot %d', row, slot))
       else
-        windower.add_to_chat(8, string.format('[XIVHotbar2] Row %d slot %d is already empty', row, slot))
+        windower.add_to_chat(8, string.format('[XIVHotbar2] Row %d slot %d was already empty', row, slot))
       end
     end
-
   elseif command == 'rename' then
     -- //htb rename <row> <slot> <new_label>
     -- Changes only the visible name shown under the slot icon.
@@ -415,7 +471,7 @@ windower.register_event('addon command', function(command, ...)
     else
       local hotbar, env = player:get_hotbar_info_without_vitals()
       local action = hotbar[env]['hotbar_' .. row]
-                 and hotbar[env]['hotbar_' .. row]['slot_' .. slot]
+          and hotbar[env]['hotbar_' .. row]['slot_' .. slot]
 
       if not action then
         windower.add_to_chat(8, string.format(
@@ -428,14 +484,13 @@ windower.register_event('addon command', function(command, ...)
         if jf then jf:close() end
         player:remove_action({ source = { row = row, slot = slot } })
         player:insert_action({ prio, tostring(row), tostring(slot),
-                               action.type, action.action, action.target or '', label })
+          action.type, action.action, action.target or '', label })
         player:load_hotbar()
         ui:load_player_hotbar(player:get_hotbar_info())
         windower.add_to_chat(8, string.format(
           '[XIVHotbar2] Row %d slot %d label -> "%s"', row, slot, label))
       end
     end
-
   elseif command == 'sc' then
     -- debugging for skillchain detection
     local target = windower.ffxi.get_mob_by_target('t')
@@ -541,7 +596,6 @@ end
 windower.register_event('mouse', function(type, x, y, delta, blocked)
   return_value = nil
   if state.ready == true and blocked == false then
-
     -- 1. Lock panel — grip drag (edit mode) and lock icon click (always).
     -- Both press and release are consumed so the game engine never sees them.
     if ui.lock_panel then
@@ -552,6 +606,10 @@ windower.register_event('mouse', function(type, x, y, delta, blocked)
       elseif lp_result ~= nil then
         return true
       end
+    end
+    -- 1b. Gauge panels — grip drag only (edit mode gated inside handle_mouse).
+    if utility_gauges:handle_mouse(type, x, y) then
+      return true
     end
 
     -- 2. Action picker — only active while in edit/demo mode
@@ -571,14 +629,26 @@ windower.register_event('mouse', function(type, x, y, delta, blocked)
       if result ~= nil and result ~= 'consumed' and result ~= 'dragging' then
         -- ---- DROP: drag from picker released over a hotbar slot ----
         local h, slot = ui:get_slot_at(x, y)
+        if ui.theme.dev_mode then
+          log(string.format('[DROP] get_slot_at(%d,%d) -> %s', x, y,
+            h and (tostring(h) .. '/' .. tostring(slot)) or 'NIL (no hotbar slot at this screen position)'))
+        end
         if h and slot then
           -- Remove whatever is already at that slot so insert_action can write fresh
           local hotbar, env = player:get_hotbar_info_without_vitals()
-          if hotbar[env]['hotbar_' .. h]['slot_' .. slot] ~= nil then
-            player:remove_action({ source = { row = h, slot = slot } })
+          local occupied = hotbar[env]['hotbar_' .. h]['slot_' .. slot] ~= nil
+          if ui.theme.dev_mode then
+            log(string.format('[DROP] target slot %s/%d/%d occupied=%s', env, h, slot, tostring(occupied)))
+          end
+          local removed_ok = true
+          if occupied then
+            removed_ok = player:remove_action({ source = { row = h, slot = slot } })
+            if ui.theme.dev_mode then
+              log(string.format('[DROP] remove_action -> %s', tostring(removed_ok)))
+            end
           end
           -- Insert the dropped action (priority 'm' = main job file)
-          player:insert_action({
+          local inserted_ok = player:insert_action({
             'm',
             tostring(h),
             tostring(slot),
@@ -587,12 +657,16 @@ windower.register_event('mouse', function(type, x, y, delta, blocked)
             result.target,
             result.alias,
           })
+          if ui.theme.dev_mode then
+            log(string.format('[DROP] insert_action("%s") -> %s%s', result.action, tostring(inserted_ok),
+              (not inserted_ok) and
+              ' -- action did NOT take. If the slot was occupied, check whether remove_action above also failed.' or ''))
+          end
           reload_hotbar()
         end
         return true
-
       elseif result == 'consumed' or result == 'dragging' then
-        return true   -- picker handled it; don't pass to move_box
+        return true -- picker handled it; don't pass to move_box
       end
       -- result == nil → not over picker; fall through to move_box below
     end
@@ -624,6 +698,10 @@ windower.register_event('prerender', function()
   if ui.is_setup and ui.hotbar.hide_hotbars == false then
     moved_row_info = move_box:get_move_box_info()
     if (moved_row_info.swapped_slots.active == true) then
+      if ui.theme.dev_mode then
+        local s, d = moved_row_info.swapped_slots.source, moved_row_info.swapped_slots.dest
+        log(string.format('[SWAP] %d/%d -> %d/%d', s.row, s.slot, d.row, d.slot))
+      end
       player:swap_actions(moved_row_info.swapped_slots)
       ui:swap_icons(moved_row_info.swapped_slots)
       moved_row_info.swapped_slots.active = false
@@ -739,6 +817,7 @@ windower.register_event('unload', function()
   first_load_done = false
 
   skillchains:destroy()
+  utility_gauges:teardown()
   ui:destroy()
 end)
 
@@ -751,6 +830,8 @@ windower.register_event('action', function(act)
         ui:load_player_hotbar(player:get_hotbar_info())
       end
     end
+    -- Feed gauges for SCH charge tracking and COR roll-number capture
+    utility_gauges:on_action(act)
   end
 end)
 
@@ -981,7 +1062,7 @@ windower.register_event('gain buff', function(id)
   elseif id == 359 or id == 402 or id == 358 or id == 401 then -- Dark Arts/Add Black/White Arts/Add White for stratagems
     reload_hotbar()
   elseif (id >= 381 and id <= 385) or id == 588 then           -- finishing move 1/2/3/4/5/6+
-    player:sync_finishing_moves()  -- re-derive from live buffs (handles upgrades correctly)
+    player:sync_finishing_moves()                              -- re-derive from live buffs (handles upgrades correctly)
   elseif id == 47 or id == 360 or id == 361 or id == 229 or id == 583 then
     -- manafont, penury, parsimony, manawell, apogee
     player:add_buff(id)
@@ -991,6 +1072,7 @@ windower.register_event('gain buff', function(id)
     player:add_buff(id)
     ui:update_tp_costs(player:get_hotbar_info())
   end
+  utility_gauges:on_buff_change()
 end)
 
 windower.register_event('lose buff', function(id)
@@ -1004,7 +1086,7 @@ windower.register_event('lose buff', function(id)
   elseif id == 359 or id == 402 or id == 358 or id == 401 then -- Dark Arts/Add Black/White Arts/Add White
     reload_hotbar()
   elseif (id >= 381 and id <= 385) or id == 588 then           -- finishing move 1/2/3/4/5/6+
-    player:sync_finishing_moves()  -- re-derive from live buffs (handles decrements correctly)
+    player:sync_finishing_moves()                              -- re-derive from live buffs (handles decrements correctly)
   elseif id == 47 or id == 360 or id == 361 or id == 229 or id == 583 then
     -- manafont, penury, parsimony, manawell, apogee
     player:remove_buff(id)
@@ -1014,6 +1096,7 @@ windower.register_event('lose buff', function(id)
     player:remove_buff(id)
     ui:update_tp_costs(player:get_hotbar_info())
   end
+  utility_gauges:on_buff_change()
 end)
 
 -- This event updates hotbar when you level up or delevel

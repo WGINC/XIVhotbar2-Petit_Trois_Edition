@@ -16,6 +16,14 @@
 
 local action_picker = {}
 
+-- Debug logging: gated on //htb debug (ui.theme.dev_mode). ui is a global
+-- (required without 'local' in xivhotbar2.lua) so it's visible here too.
+local function dbg(msg)
+  if ui and ui.theme and ui.theme.dev_mode then
+    log('[AP] ' .. msg)
+  end
+end
+
 -- ── Constants ─────────────────────────────────────────────────────────────
 local ICON_SIZE     = 40   -- set from theme in init()
 local ICON_GAP      = 4
@@ -673,29 +681,80 @@ function action_picker:build_actions()
 
   -- Job Abilities
   local ab = windower.ffxi.get_abilities()
+  local ja_added = {}  -- dedupe by lowercase name (see stratagem note below)
+
+  local function add_job_ability(res)
+    if res.en:lower() == 'stratagems' then return end  -- menu placeholder, not a real castable action
+    local db = database_ref.ja and database_ref.ja[res.en:lower()]
+    if not (db and db.icon) then return end
+    if ja_added[res.en:lower()] then return end
+    ja_added[res.en:lower()] = true
+    local target = 'me'
+    if res.targets then
+      if res.targets.Enemy and not res.targets.Self then target = 't'
+      elseif (res.targets.Player or res.targets.Party)
+             and not res.targets.Enemy then target = 'stpc' end
+    end
+    local icon_path = safe_icon(windower.addon_path..'/images/icons/abilities/'
+                          ..string.format('%05d',db.icon)..'.png')
+    table.insert(self.actions.ja, {
+      type='ja', action=res.en, target=target,
+      alias=shorten_ability_name(res.en), icon_path=icon_path, name=res.en,
+      scope=get_scope(res),
+    })
+  end
+
   if ab and ab.job_abilities then
     for _, aid in pairs(ab.job_abilities) do
       if resources.job_abilities[aid] then
-        local res = resources.job_abilities[aid]
-        local db  = database_ref.ja and database_ref.ja[res.en:lower()]
-        if db and db.icon then
-          local target = 'me'
-          if res.targets then
-            if res.targets.Enemy and not res.targets.Self then target = 't'
-            elseif (res.targets.Player or res.targets.Party)
-                   and not res.targets.Enemy then target = 'stpc' end
-          end
-          local icon_path = safe_icon(windower.addon_path..'/images/icons/abilities/'
-                                ..string.format('%05d',db.icon)..'.png')
-          table.insert(self.actions.ja, {
-            type='ja', action=res.en, target=target,
-            alias=shorten_ability_name(res.en), icon_path=icon_path, name=res.en,
-            scope=get_scope(res),
-          })
-        end
+        add_job_ability(resources.job_abilities[aid])
       end
     end
   end
+
+  -- windower.ffxi.get_abilities().job_abilities is sourced from the
+  -- client's per-recast-group slot table: it stores one ability id per
+  -- recast_id, not one per ability. SCH's stratagems (Penury, Parsimony,
+  -- Celerity, Alacrity, Addendum: White/Black, etc.) all share a single
+  -- recast_id (SCH_STRAT_RECAST_ID = 231, same constant used in
+  -- utility_gauges.lua), so only one of them ever comes through the loop
+  -- above — the rest silently never appear. The single id that *does*
+  -- come through is also unreliable: it's frequently id 223, "Stratagems"
+  -- (en), the menu-opener placeholder (its own separate recast_id of 233)
+  -- rather than a real, directly-castable stratagem, which is why it
+  -- showed up but did nothing when used.
+  --
+  -- Fix: walk the full job_abilities resource table for every entry on
+  -- recast_id 231 and add it directly, gated by a hardcoded level table
+  -- (job_abilities resource entries carry no "levels" field the way spell
+  -- resources do, so there's nothing to read here — these levels are
+  -- fixed FFXI values, unchanged across all of SCH's lifetime).
+  local SCH_STRAT_RECAST_ID = 231
+  local JOB_SCH = 20  -- matches utility_gauges.lua's JOB_SCH
+  local SCH_STRAT_LEVELS = {
+    ['penury']          = 10, ['addendum: white'] = 10,
+    ['celerity']        = 25, ['parsimony']       = 10,
+    ['alacrity']        = 25, ['addendum: black'] = 30,
+    ['accession']       = 40, ['manifestation']   = 40,
+    ['rapture']         = 55, ['ebullience']       = 55,
+    ['altruism']        = 75, ['focalization']     = 75,
+    ['tranquility']     = 75, ['equanimity']       = 75,
+    ['perpetuance']     = 87, ['immanence']        = 87,
+  }
+  local pp = windower.ffxi.get_player()
+  local main_job_id = pp and pp.main_job_id or 0
+  local sub_job_id  = pp and pp.sub_job_id  or 0
+  local main_job_lv = pp and pp.main_job_level or 0
+  local sub_job_lv  = pp and pp.sub_job_level  or 0
+  for _, res in pairs(resources.job_abilities) do
+    if res.recast_id == SCH_STRAT_RECAST_ID then
+      local req = SCH_STRAT_LEVELS[res.en:lower()]
+      local usable = req and ((main_job_id == JOB_SCH and main_job_lv >= req)
+                            or (sub_job_id  == JOB_SCH and sub_job_lv  >= req))
+      if usable then add_job_ability(res) end
+    end
+  end
+
   table.sort(self.actions.ja, function(a,b) return a.name < b.name end)
 
   -- Weapon Skills
@@ -1389,7 +1448,10 @@ function action_picker:on_mouse(ev_type, x, y)
       self.drag = {active=true, action=action}
       drag_icon:path(action.icon_path)
       drag_icon:pos(x - math.floor(ICON_SIZE/2), y - math.floor(ICON_SIZE/2))
-      drag_icon:show(); return 'consumed'
+      drag_icon:show()
+      dbg(string.format('drag started: "%s" (type=%s, target=%s) picked up at (%d,%d)',
+        action.action, action.type, tostring(action.target), x, y))
+      return 'consumed'
     end
 
     if self:is_over_panel(x,y) then return 'consumed' end
@@ -1429,6 +1491,7 @@ function action_picker:on_mouse(ev_type, x, y)
     if self.drag.active then
       local dropped = self.drag.action
       self.drag = {active=false, action=nil}; drag_icon:hide()
+      dbg(string.format('drag released: "%s" dropped at screen (%d,%d) -- handing off to ui:get_slot_at', dropped.action, x, y))
       return dropped
     end
     if self:is_over_panel(x,y) then return 'consumed' end

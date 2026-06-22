@@ -10,3 +10,5 @@ It will all be described more thouroughly at a later date, however, the new comm
 //htb rename <row> <slot>: Renames the visible action
 
 //htb set <row> <slot> <type> <action> [target] [alias]: Manually tweaks everything about an action on the hotbar
+
+Content Warning: Having looked for artists and found none willing, I do have to admit that (ideally temporarily), the art for the three current job gauges (RUN, SCH, and COR) is AI generated.

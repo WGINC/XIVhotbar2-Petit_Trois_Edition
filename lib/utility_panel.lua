@@ -29,6 +29,11 @@ function utility_panel:new(x, y, w, h)
   p.drag_off_x  = 0
   p.drag_off_y  = 0
   p.visible     = true
+  -- When true, clicking anywhere in the content area in edit mode starts a
+  -- drag (same as clicking the grip).  Set this on gauge panels so the user
+  -- doesn't have to hit the narrow grip strip precisely.  Leave false for the
+  -- lock button so its content click still fires toggle_edit_mode.
+  p.content_draggable = false
 
   p.grip_img = images.new({draggable=false, texture={fit=false}}, true)
   p.grip_img:path(windower.addon_path .. '/images/other/grip.png')
@@ -114,6 +119,17 @@ function utility_panel:on_mouse(ev_type, x, y)
   -- Block grip area even when not dragging (edit mode)
   if self.edit_mode and (ev_type == 1 or ev_type == 2)
                     and self:is_over_grip(x, y) then
+    return 'consumed'
+  end
+
+  -- Content-area drag in edit mode (gauge panels only, content_draggable=true).
+  -- This lets the user grab any part of the gauge to move it, not just the
+  -- narrow grip strip — mirrors exactly how the lock button drag works.
+  if self.edit_mode and self.content_draggable and ev_type == 1
+     and self:is_over_content(x, y) then
+    self.dragging   = true
+    self.drag_off_x = x - self.x
+    self.drag_off_y = y - self.y
     return 'consumed'
   end
 

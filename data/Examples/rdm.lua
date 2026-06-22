@@ -132,6 +132,26 @@ xivhotbar_keybinds_job['Base'] = {
   {'battle 6 11', 'ma', 'Enblizzard', 'me', 'Enblizz'},
   {'battle 6 12', 'ma', 'Enthunder', 'me', 'Enthun'},
 
+	{'b 3 1', 'ma', "Dia II", 't', "DiII"},
+	{'b 1 11', 'ws', "Vorpal Blade", 't', "VorpBl"},
+	{'b 7 1', 'ma', "Dia", 't', "Di"},
+	{'b 7 2', 'ma', "Dia II", 't', "DiII"},
+	{'b 7 3', 'ma', "Dia III", 't', "DiII"},
+	{'b 7 4', 'ma', "Diaga", 't', "Dig"},
+	{'b 2 4', 'ja', "Light Arts", 'me', "LighAr"},
+	{'b 2 3', 'ja', "Dark Arts", 'me', "DarkAr"},
+	{'b 7 8', 'ma', "Valaineral", 'me', "Valn"},
+	{'b 7 9', 'ma', "Yoran-Oran (UC)", 'me', "Yorn-O"},
+	{'b 7 10', 'ma', "Qultada", 'me', "Qult"},
+	{'b 7 11', 'ma', "Shantotto II", 'me', "ShanII"},
+	{'b 7 12', 'ma', "Zeid II", 'me', "ZedII"},
+	{'b 2 5', 'ja', "Addendum: Black", 'me', "Adde:B"},
+	{'b 2 6', 'ja', "Accession", 'me', "Acce"},
+	{'b 2 7', 'ja', "Alacrity", 'me', "Alac"},
+	{'b 2 8', 'ja', "Celerity", 'me', "Celr"},
+	{'b 2 9', 'ja', "Manifestation", 'me', "Manf"},
+	{'b 2 10', 'ja', "Parsimony", 'me', "Pars"},
+	{'b 2 11', 'ja', "Penury", 'me', "Penr"},
  }
 
 
@@ -160,8 +180,9 @@ xivhotbar_keybinds_job['WHM'] = {
   {'battle 2 12', 'ma', 'Shellra', 'stpc', 'Shellra'},
   --------------------------------------------------------------------------------------
 
-	{'b 3 1', 'ma', 'Dia III', 't', 'DiII'},
+	{'b 3 1', 'ma', "Dia II", 't', "DiII"},
 	{'b 7 1', 'ma', 'Dia III', 't', 'DiII'},
+	{'b 1 11', 'ws', "Vorpal Blade", 't', "VorpBl"},
 }
 
 xivhotbar_keybinds_job['NIN'] = {
@@ -211,7 +232,6 @@ xivhotbar_keybinds_job['Sword'] = {
   {'battle 1 8', 'ws', 'Savage Blade', 't', 'Savage'},
   {'battle 1 9', 'ws', 'Fast Blade', 't', 'Fast'},
   {'battle 1 10', 'ws', 'Spirits Within', 't', 'Spirits'},
-  {'battle 1 11', 'ws', 'Circle Blade', 't', 'Circle','wsaoe'},
 
 
 }

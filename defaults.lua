@@ -64,17 +64,12 @@ defaults.Hotbar.Theme.Frame                  = 'ffxiv'
 defaults.Hotbar.Theme.BarBackground          = 'none'   -- key from HOTBAR_THEMES
 defaults.Hotbar.ShowCooldownSweep            = true    -- radial arc over cooling-down slots
 
-defaults.Utility                             = {}
-defaults.Utility.LockButton                  = {}
-defaults.Utility.LockButton.OffsetX          = 0   -- 0 = auto-position near bar 1 on first run
-defaults.Utility.LockButton.OffsetY          = 0
-
 defaults.ActionPicker                        = {}
 defaults.ActionPicker.PanelTheme             = 'dark'   -- key from PANEL_THEMES
 defaults.ActionPicker.Font                   = 'Calibri'
 
 defaults.Hotbar.Style                        = {}
-defaults.Hotbar.Style.HotbarCount            = 6
+defaults.Hotbar.Style.HotbarCount            = 7
 defaults.Hotbar.Style.HotbarLength           = 12
 defaults.Hotbar.Style.SlotIconScale          = 1
 defaults.Hotbar.Style.SlotAlpha              = 100
@@ -285,6 +280,10 @@ defaults.Overlays.DisableScroll = false
 
 defaults.Controls = {}
 defaults.Controls.ToggleBattleMode = 43
+
+-- Utility panels (lock/unlock button position, etc.)
+defaults.Utility = {}
+defaults.Utility.LockButton = { OffsetX = 0, OffsetY = 0 }
 
 defaults.Dev = {}
 defaults.Dev.DevMode = false

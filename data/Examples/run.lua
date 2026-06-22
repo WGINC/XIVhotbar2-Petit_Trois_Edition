@@ -80,6 +80,18 @@ xivhotbar_keybinds_job['Base'] = {
   -- { 'battle 6 10', 'ma', 'Barvirus',           'me',    'BVirus',    '' },
   { 'battle 6 11', 'ma', 'Barpetrify',         'me',    'BPetri',    '' },
   { 'battle 6 12', 'ma', 'Baramnesia',         'me',    'Bamnesia',  '' },
+	{'b 7 1', 'ma', "Stonega", 't', "Ston"},
+	{'b 7 9', 'ma', "Yoran-Oran (UC)", 'me', "Yorn-O"},
+	{'b 7 11', 'ma', "Qultada", 'me', "Qult"},
+	{'b 7 12', 'ma', "Shantotto II", 'me', "ShanII"},
+	{'b 7 8', 'ma', "Kupofried", 'me', "Kupf"},
+	{'b 7 3', 'ma', "Aeroga", 't', "Aerg"},
+	{'b 7 2', 'ma', "Waterga", 't', "Watr"},
+	{'b 7 10', 'ma', "Zeid II", 'me', "ZedII"},
+	{'b 7 7', 'ma', "Valaineral", 'me', "Valn"},
+	{'b 4 5', 'ma', "Thundaga", 't', "Thun"},
+	{'b 7 4', 'ma', "Firaga", 't', "Firg"},
+	{'b 7 6', 'ma', "Blizzaga", 't', "Bliz"},
 }
 
 -- SUBJOBS
