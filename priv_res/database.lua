@@ -145,7 +145,8 @@ function database:parse_ws_lua()
     local new_weapon_skill   = {}
     new_weapon_skill.id      = tostring(contents[key].id)
     new_weapon_skill.icon    = string.format("%02d", database:map_ws(contents[key].id))
-    new_weapon_skill.desc    = ability_descriptions[contents[key].id].en
+    local ws_desc_entry      = ability_descriptions[contents[key].id]
+    new_weapon_skill.desc    = (ws_desc_entry and ws_desc_entry.en) or ""
     new_weapon_skill.name    = contents[key].en
     new_weapon_skill.tpcost  = tostring(1000)
     new_weapon_skill.cast    = tostring(0)
@@ -213,7 +214,8 @@ function database:parse_abilities_lua()
     new_abil.mpcost  = tonumber(contents[key].mp_cost)
     new_abil.tpcost  = tonumber(contents[key].tp_cost)
     new_abil.range   = ranges[contents[key].range]
-    new_abil.desc    = ability_descriptions[contents[key].id + 512].en
+    local ja_desc_entry = ability_descriptions[contents[key].id + 512]
+    new_abil.desc    = (ja_desc_entry and ja_desc_entry.en) or ""
     new_abil.cast    = tostring(0)
     new_abil.recast  = tostring(0)
     new_abil.element = tostring(contents[key].element)
@@ -260,7 +262,8 @@ function database:parse_spells_lua()
     new_spell.element                 = contents[key].element
     new_spell.recast                  = contents[key].recast
     new_spell.range                   = ranges[contents[key].range]
-    new_spell.desc                    = spell_descriptions[contents[key].id].en
+    local ma_desc_entry                = spell_descriptions[contents[key].id]
+    new_spell.desc                    = (ma_desc_entry and ma_desc_entry.en) or ""
     new_spell.prefix                  = contents[key].prefix -- useful to detect pet abilities
     new_spell.type                    = contents[key].type
     new_spell.targets                 = contents[key].targets

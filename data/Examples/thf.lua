@@ -36,6 +36,11 @@ xivhotbar_keybinds_job['Base'] = {
   { 'battle 5 1',  'input', '/ra <t>',                                                            '',   'Pull',    'ra' },
 
   -- Hotbar #6
+	{'b 7 9', 'ma', "Valaineral", 'me', "Valn"},
+	{'b 7 10', 'ma', "Zeid II", 'me', "ZedII"},
+	{'b 7 11', 'ma', "Yoran-Oran (UC)", 'me', "Yorn-O"},
+	{'b 7 12', 'ma', "Qultada", 'me', "Qult"},
+	{'b 7 8', 'ma', "Shantotto II", 'me', "ShanII"},
 }
 
 -- SUBJOBS

@@ -1,41 +1,15 @@
 --[[
-  utility_gauges.lua — job-specific resource gauge panels.
+  utility_gauges.lua - job-specific HUD panels
 
-  DNC  — 6 Finishing Move pips (seafoam green)
-  SCH  — up to 5 Stratagem charge pips (blue / purple), with a dagger mark
-         to the left when an Addendum is primed
-  COR  — 2 Phantom Roll "playing cards", stacked like a hand, each showing
-         its roll's number and a cursive roll-name label at the top of the
-         card (e.g. "Choral", "Tact"), pre-rendered and pre-rotated to match
-         the card's tilt the same way the number glyphs are. The name's dark
-         outline is baked into the image (not runtime color) so it stays
-         legible against the white card art regardless of tint, and its
-         fill color is fixed rather than luck-tinted like the number.
-  RUN  — a single fused stone archway (procedurally generated — cracked
-         texture, beveled rim, 3 carved sockets), now a full Romanesque
-         arch that sweeps down to a vertical tangent on each side and
-         continues as a short pillar stub carrying a carved relief panel
-         and a glowing cyan diamond-chain inlay, matching the reference
-         doorway. The 3 rune glyphs drop directly into the arch's carved
-         sockets — same plain art in every slot, no per-slot tilt variant
-         (an earlier left/right-leaning version depended on 16 extra
-         rotated files; a missing one is what showed up in-game as a
-         white square). An empty slot shows the bare carved socket, a
-         slotted rune shows its glyph (color baked into the art, not
-         runtime-tinted). A true 5-segment donut ring sits below, tracking
-         the rune-swap recast (5 pre-rotated wedge images stacked at one
-         position — same "no runtime rotation" approach as the COR cards
-         / hotbar cooldown sweep frames — replacing the old 10-dot-pip
-         placeholder)
+  DNC   6 Finishing Move pips
+  SCH   Stratagem charge pips, addendum dagger, stratagem symbol row,
+        Sublimation ∫ indicator.  Sub-panels are independently positionable
+        when the gem gauge is hidden; fused into one draggable unit when shown.
+  COR   2 Phantom Roll cards (pre-rendered art, no runtime rotation)
+  RUN   Stone arch with rune sockets and recast ring
 
-  All panels set content_draggable=true (utility_panel flag) so the user can
-  grab any part of the gauge body in edit mode — not just the narrow grip strip.
-
-  The COR panel uses ONLY images.new({draggable=false}) for all visuals.
-  Text objects are intentionally avoided: Windower processes text-object drag
-  events before the Lua mouse handler fires (setting blocked=true), which
-  prevents our drag code from ever running.  Image objects with draggable=false
-  do not block mouse events and are identical in behaviour to the lock button.
+  All visuals use images.new({draggable=false}).  text objects block the mouse
+  handler before Lua sees it, which would break drag entirely.
 ]]
 
 local utility_gauges = {}
@@ -114,27 +88,89 @@ local function create_dnc_panel(x, y)
   return panel
 end
 
--- ── SCH Stratagem gauge ──────────────────────────────────────────────────────
--- get_ability_recasts()[231] returns recast in ticks (60ths of a second);
--- divide by 60 for seconds, same convention as get_spell_recasts().
-local SCH_STRAT_RECAST_ID = 231
-local SCH_MAX_PIPS        = 5
-
--- Addendum: White (401) / Addendum: Black (402). The dagger mark shows
--- whether an addendum is currently primed — buff state the recast-based
--- pip count alone can't represent.
+-- ── SCH ────────────────────────────────────────────────────────────────────────
+local SCH_STRAT_RECAST_ID     = 231
+local SCH_MAX_PIPS            = 5
 local SCH_ADDENDUM_WHITE_BUFF = 401
 local SCH_ADDENDUM_BLACK_BUFF = 402
-local SCH_DAGGER_W   = 8
-local SCH_DAGGER_GAP = 6
-local SCH_PIP_OFFSET = SCH_DAGGER_W + SCH_DAGGER_GAP
 
-local function make_dagger(x, y)
-  local img = images.new({draggable=false, texture={fit=false}}, true)
-  img:path(windower.addon_path .. '/images/other/dagger.png')
-  img:fit(false); img:size(SCH_DAGGER_W, PIP_H); img:pos(x, y); img:hide()
-  return img
+-- Dagger  source 120×180 px, displayed 36×54
+local SCH_DAGGER_W    = 36
+local SCH_DAGGER_H    = 54
+local SCH_DAGGER_GAP  = 4
+local SCH_PIP_OFFSET  = SCH_DAGGER_W + SCH_DAGGER_GAP   -- 32
+
+-- slide-in animation: 20-frame smoothstep driven by prerender tick
+local SCH_DAGGER_ANIM_TOTAL = 20
+local SCH_DAGGER_SLIDE_PX   = 30
+local sch_dagger_anim_frame = SCH_DAGGER_ANIM_TOTAL
+local sch_addendum_prev     = false
+
+-- Sublimation ∫  source 201×274 px
+local SCH_SUBLIM_W    = 34   -- display px (source 201×274)
+local SCH_SUBLIM_H    = 82
+local SCH_SUBLIM_GAP  = 2    -- flush to gauge right edge
+
+-- buff IDs populated lazily; resources.buffs not safe at module load
+local SCH_SUBLIM_IDS    = {}   -- buff_id → 'charge' | 'ready'
+local sch_sublim_built  = false
+
+-- visibility flags (all default on; read from settings in setup())
+local sch_show_gauge  = true
+local sch_show_gems   = true
+local sch_show_strats = true
+local sch_show_sublim  = true
+local sch_show_dagger  = true
+local sch_sym_panel    = nil
+
+-- gem gauge  display px; source PNGs 2×
+local SCH_GAUGE_W = 235
+local SCH_GAUGE_H = 77
+local SCH_GEM_W   = 46
+local SCH_GEM_H   = 46
+local SCH_SLOT_XS = {38, 76, 114, 152, 190}
+local SCH_GEM_DY  = 14    -- gem top: slot_centre_y(40) - half_gem(23) ≈ 14
+
+-- stratagem symbols  source 60×60, display 32×32
+-- light/dark pairs share slot positions 0–6; only one set visible at a time
+local SCH_SYM_W       = 32
+local SCH_SYM_H       = 32
+local SCH_SYM_HGAP    = 2
+local SCH_SYM_VOFFSET = 4    -- gap between symbol bottom and gauge top
+local SCH_SYM_ROW_DY  = -(32 + 4)   -- = -36
+
+-- [1–7] light arts, [8–14] dark arts - same 7 display slots
+local SCH_STRAT_LIST = {
+  -- ── Light Arts (White Grimoire) ──────────────────────────
+  {'penury',      'sch_sym_penury.png'},       -- slot 0: MP cost reduction
+  {'celerity',    'sch_sym_celerity.png'},      -- slot 1: cast speed
+  {'accession',   'sch_sym_accession.png'},     -- slot 2: AoE white magic
+  {'rapture',     'sch_sym_rapture.png'},       -- slot 3: healing enhancement
+  {'altruism',    'sch_sym_altruism.png'},      -- slot 4: enhancing magic (merit)
+  {'tranquility', 'sch_sym_tranquility.png'},   -- slot 5: elemental (merit)
+  {'perpetuance', 'sch_sym_perpetuance.png'},   -- slot 6: buff duration
+  -- ── Dark Arts (Black Grimoire) ───────────────────────────
+  {'parsimony',     'sch_sym_parsimony.png'},      -- slot 0: MP cost reduction
+  {'alacrity',      'sch_sym_alacrity.png'},        -- slot 1: recast speed
+  {'manifestation', 'sch_sym_manifestation.png'},   -- slot 2: AoE black magic
+  {'ebullience',    'sch_sym_ebullience.png'},       -- slot 3: magic attack
+  {'focalization',  'sch_sym_focalization.png'},     -- slot 4: cast speed (merit)
+  {'equanimity',    'sch_sym_equanimity.png'},       -- slot 5: MP cost (merit)
+  {'immanence',     'sch_sym_immanence.png'},        -- slot 6: elemental enhancement
+}
+
+local SCH_STRAT_IDX = {}
+for i, v in ipairs(SCH_STRAT_LIST) do SCH_STRAT_IDX[v[1]] = i end
+local SCH_BUFF_TO_STRAT_CACHE = {}  -- buff_id → name; filled on first render
+
+-- symbol row x-start, centred over the gauge background
+local function sch_sym_x0(gx)
+  return gx + math.floor((SCH_GAUGE_W - (7*SCH_SYM_W + 6*SCH_SYM_HGAP)) / 2)
 end
+
+-- module-scope: survives panel recreation on arts/addendum changes
+local sch_used       = 0
+local sch_next_regen = nil
 
 local function sch_max_charges(level)
   if     level >= 90 then return 5
@@ -145,22 +181,11 @@ local function sch_max_charges(level)
   else                     return 0
   end
 end
-
--- Charges regenerate one at a time; a full cycle from empty to max takes
--- 240s (165s with the 549+ JP "Stratagem Recharge" merit), so each
--- charge's share of that cycle is full_cycle/max seconds.
 local function sch_seconds_per_charge(pd, max)
   local jp = pd and pd.job_points and pd.job_points.sch and pd.job_points.sch.jp_spent or 0
   local full_cycle = jp > 549 and 165 or 240
   return full_cycle / max
 end
-
--- Tracked at module scope, not on the panel: reload_hotbar() (triggered by
--- arts swaps and Addendum buff changes) destroys and recreates this panel,
--- and panel-instance state would be lost on every recreation.
-local sch_used       = 0
-local sch_next_regen = nil
-
 local function sch_current_charges(pd, max)
   local spc = sch_seconds_per_charge(pd, max)
   local now = os.clock()
@@ -169,9 +194,7 @@ local function sch_current_charges(pd, max)
     sch_next_regen = sch_used > 0 and (sch_next_regen + spc) or nil
   end
   if sch_used == 0 and sch_next_regen == nil then
-    -- Recover one charge already mid-recast at load time from the live
-    -- value. Only ever recovers one; further uses are tracked precisely
-    -- via note_charge_used().
+    -- seed one charge from live recast on first call
     local recasts   = windower.ffxi.get_ability_recasts()
     local remaining = (recasts and recasts[SCH_STRAT_RECAST_ID] or 0) / 60
     if remaining > 0 then
@@ -182,26 +205,254 @@ local function sch_current_charges(pd, max)
   return max - math.min(sch_used, max)
 end
 
-local function create_sch_panel(x, y)
-  local panel = utility_panel:new(x, y, SCH_PIP_OFFSET + pip_row_width(SCH_MAX_PIPS), PIP_H)
-  panel.content_draggable = true
-  panel.dagger     = make_dagger(x, y)
-  panel.pips       = make_pip_row(x + SCH_PIP_OFFSET, y, SCH_MAX_PIPS)
+local function make_dagger(x, y)
+  local img = images.new({draggable=false, texture={fit=false}})
+  img:path(windower.addon_path .. '/images/other/dagger.png')
+  img:fit(false); img:size(SCH_DAGGER_W, SCH_DAGGER_H); img:pos(x, y); img:hide()
+  return img
+end
 
-  panel.on_position_changed = function(p, nx, ny)
-    p.dagger:pos(nx, ny)
-    reposition_pip_row(p.pips, nx + SCH_PIP_OFFSET, ny)
+local function sch_fuse_positions(gem_x, gem_y)
+  local row_w = 7*SCH_SYM_W + 6*SCH_SYM_HGAP
+  local gx    = gem_x + SCH_PIP_OFFSET
+  return gem_x, gem_y + math.floor((SCH_GAUGE_H-SCH_DAGGER_H)/2),
+         gem_x + SCH_PIP_OFFSET + math.floor((SCH_GAUGE_W-row_w)/2),
+         gem_y - SCH_SYM_H - SCH_SYM_VOFFSET,
+         gx + SCH_GAUGE_W + SCH_SUBLIM_GAP,
+         gem_y + math.floor((SCH_GAUGE_H-SCH_SUBLIM_H)/2)
+end
+local function sch_apply_fuse(gem_x, gem_y)
+  local dx,dy,sx,sy,slx,sly = sch_fuse_positions(gem_x, gem_y)
+  if sch_dagger_panel then sch_dagger_panel:set_position(dx, dy)   end
+  if sch_sym_panel    then sch_sym_panel:set_position(sx, sy)       end
+  if sch_sublim_panel then sch_sublim_panel:set_position(slx, sly) end
+end
+local function sch_apply_unfuse()
+  sch_fused = false
+  local function go(p, ix, iy) if p and (ix~=0 or iy~=0) then p:set_position(ix,iy) end end
+  go(sch_sym_panel,    sch_sym_ind_x,    sch_sym_ind_y)
+  go(sch_dagger_panel, sch_dagger_ind_x, sch_dagger_ind_y)
+  go(sch_sublim_panel, sch_sublim_ind_x, sch_sublim_ind_y)
+  if sch_edit_active then
+    if sch_sym_panel    then sch_sym_panel:set_edit_mode(true)    end
+    if sch_dagger_panel then sch_dagger_panel:set_edit_mode(true) end
+    if sch_sublim_panel then sch_sublim_panel:set_edit_mode(true) end
   end
-  panel.on_show    = function(p) p:render() end
-  panel.on_hide    = function(p) hide_pips(p.pips); p.dagger:hide() end
-  panel.on_destroy = function(p) hide_pips(p.pips); p.dagger:hide() end
+end
 
-  -- Called from utility_gauges:on_action() for any ability sharing
-  -- recast_id 231 (Addendum, Penury, Celerity, etc.).
+-- ── Stratagem symbol row - independent draggable panel ───────────────────────
+local function create_sch_sym_panel(x, y)
+  local row_w = 7 * SCH_SYM_W + 6 * SCH_SYM_HGAP
+  local panel = utility_panel:new(x, y, row_w, SCH_SYM_H)
+  panel.content_draggable = true
+  panel.syms = {}
+  for i, strat in ipairs(SCH_STRAT_LIST) do
+    local slot = (i <= 7) and (i - 1) or (i - 8)
+    local img  = images.new({draggable=false, texture={fit=false}})
+    img:path(windower.addon_path .. '/images/sch/' .. strat[2])
+    img:fit(false); img:size(SCH_SYM_W, SCH_SYM_H)
+    img:pos(x + slot*(SCH_SYM_W+SCH_SYM_HGAP), y); img:hide()
+    panel.syms[i] = img
+  end
+  local function repos(p, nx, ny)
+    for i = 1, #SCH_STRAT_LIST do
+      if p.syms[i] then
+        local slot = (i <= 7) and (i-1) or (i-8)
+        p.syms[i]:pos(nx + slot*(SCH_SYM_W+SCH_SYM_HGAP), ny)
+      end
+    end
+  end
+  local function hsyms(p)
+    for i = 1, #SCH_STRAT_LIST do if p.syms[i] then p.syms[i]:hide() end end
+  end
+  panel.on_position_changed = repos
+  panel.on_show    = function(p) p:render() end
+  panel.on_hide    = hsyms
+  panel.on_destroy = hsyms
+  function panel:render()
+    if not self.visible or not self.syms then return end
+    if not sch_show_strats then
+      for i = 1, #SCH_STRAT_LIST do if self.syms[i] then self.syms[i]:hide() end end
+      return
+    end
+    local dark = false
+    local pd   = windower.ffxi.get_player()
+    if pd and pd.buffs then
+      for _, b in ipairs(pd.buffs) do
+        if b == 359 or b == SCH_ADDENDUM_BLACK_BUFF then dark = true; break end
+      end
+    end
+    local active = {}; local br = type(resources)=='table' and resources.buffs
+    if pd and pd.buffs then
+      for _, bid in ipairs(pd.buffs) do
+        local name = SCH_BUFF_TO_STRAT_CACHE[bid]
+        if not name and br then
+          local b2 = br[bid]
+          if b2 and b2.en then
+            name = b2.en:lower()
+            if not SCH_STRAT_IDX[name] then name = nil end
+            if name then SCH_BUFF_TO_STRAT_CACHE[bid] = name end
+          end
+        end
+        if name then active[name] = true end
+      end
+    end
+    for i, strat in ipairs(SCH_STRAT_LIST) do
+      local img = self.syms[i]
+      if img then
+        if ((i>7)==dark) and active[strat[1]] then img:show() else img:hide() end
+      end
+    end
+  end
+  return panel
+end
+
+-- ── Dagger indicator - independent draggable panel ───────────────────────────
+local function create_sch_dagger_panel(x, y)
+  local panel = utility_panel:new(x, y, SCH_DAGGER_W, SCH_DAGGER_H)
+  panel.content_draggable = true
+  local img = images.new({draggable=false, texture={fit=false}})
+  img:path(windower.addon_path .. '/images/other/dagger.png')
+  img:fit(false); img:size(SCH_DAGGER_W, SCH_DAGGER_H); img:pos(x, y); img:hide()
+  panel.dagger = img
+  panel.on_position_changed = function(p, nx, ny) p.dagger:pos(nx, ny) end
+  local function hd(p) if p.dagger then p.dagger:hide() end end
+  panel.on_hide    = hd
+  panel.on_destroy = hd
+  panel.on_show    = function(p) p:render() end
+  function panel:render()
+    if not self.visible or not self.dagger then return end
+    local dark, addendum = false, false
+    local pd = windower.ffxi.get_player()
+    if pd and pd.buffs then
+      for _, b in ipairs(pd.buffs) do
+        if b == 359 or b == SCH_ADDENDUM_BLACK_BUFF then dark = true end
+        if b == SCH_ADDENDUM_WHITE_BUFF or b == SCH_ADDENDUM_BLACK_BUFF then addendum = true end
+      end
+    end
+    local dr, dg, db = dark and 155 or 80, dark and 75 or 140, dark and 215 or 220
+    local was = sch_addendum_prev
+    sch_addendum_prev = addendum
+    if addendum and sch_show_dagger and sch_show_gauge then
+      self.dagger:color(dr, dg, db); self.dagger:alpha(255)
+      if not was then
+        self.dagger:pos(self.x, self.y - SCH_DAGGER_SLIDE_PX)
+        sch_dagger_anim_frame = 0
+      end
+      self.dagger:show()
+    else
+      self.dagger:hide()
+    end
+  end
+  return panel
+end
+
+-- ── Sublimation indicator - independent draggable panel ──────────────────────
+local function create_sch_sublim_panel(x, y)
+  local panel = utility_panel:new(x, y, SCH_SUBLIM_W, SCH_SUBLIM_H)
+  panel.content_draggable = true
+  local img = images.new({draggable=false, texture={fit=false}})
+  img:path(windower.addon_path .. '/images/sch/sch_sublim.png')
+  img:fit(false); img:size(SCH_SUBLIM_W, SCH_SUBLIM_H); img:pos(x, y); img:hide()
+  panel.sublim = img
+  panel.on_position_changed = function(p, nx, ny) if p.sublim then p.sublim:pos(nx, ny) end end
+  local function hs(p) if p.sublim then p.sublim:hide() end end
+  panel.on_hide    = hs
+  panel.on_destroy = hs
+  panel.on_show    = function(p) p:render() end
+  function panel:render()
+    if not self.visible or not self.sublim then return end
+    if not sch_show_sublim or not sch_show_gauge then self.sublim:hide(); return end
+    if not sch_sublim_built then
+      sch_sublim_built = true
+      local br = type(resources) == 'table' and resources.buffs
+      if br then
+        for id, buff in pairs(br) do
+          if buff and buff.en then
+            local en = buff.en:lower()
+            if en:find('sublimation') then
+              SCH_SUBLIM_IDS[id] = en:find('complet') and 'ready' or 'charge'
+            end
+          end
+        end
+      end
+    end
+    local pd = windower.ffxi.get_player()
+    local state = nil
+    if pd and pd.buffs then
+      for _, bid in ipairs(pd.buffs) do
+        local s = SCH_SUBLIM_IDS[bid]
+        if s == 'ready'  then state = 'ready';  break end
+        if s == 'charge' then state = 'charge' end
+      end
+    end
+    if     state == 'ready'  then self.sublim:color(60,220,100); self.sublim:alpha(255); self.sublim:show()
+    elseif state == 'charge' then self.sublim:color(255,80,60);  self.sublim:alpha(255); self.sublim:show()
+    else                          self.sublim:hide()
+    end
+  end
+  return panel
+end
+
+local function create_sch_panel(x, y)
+  local gx = x + SCH_PIP_OFFSET
+
+  local panel = utility_panel:new(x, y, SCH_PIP_OFFSET + SCH_GAUGE_W, SCH_GAUGE_H)
+  panel.content_draggable = true
+
+  -- Gauge background
+  local bg = images.new({draggable=false, texture={fit=false}})
+  bg:path(windower.addon_path .. '/images/sch/sch_gauge_bg.png')
+  bg:fit(false); bg:size(SCH_GAUGE_W, SCH_GAUGE_H); bg:pos(gx, y); bg:show()
+  panel.bg = bg
+
+
+  -- Gem pips (filled / empty pair per slot)
+  panel.gems_on  = {}
+  panel.gems_off = {}
+  for i = 1, SCH_MAX_PIPS do
+    local gpx = gx + SCH_SLOT_XS[i] - math.floor(SCH_GEM_W / 2)
+    local gpy = y + SCH_GEM_DY
+    local on_img = images.new({draggable=false, texture={fit=false}})
+    on_img:path(windower.addon_path .. '/images/sch/sch_pip_on.png')
+    on_img:fit(false); on_img:size(SCH_GEM_W, SCH_GEM_H); on_img:pos(gpx, gpy); on_img:hide()
+    panel.gems_on[i] = on_img
+    local off_img = images.new({draggable=false, texture={fit=false}})
+    off_img:path(windower.addon_path .. '/images/sch/sch_pip_off.png')
+    off_img:fit(false); off_img:size(SCH_GEM_W, SCH_GEM_H); off_img:pos(gpx, gpy); off_img:hide()
+    panel.gems_off[i] = off_img
+  end
+
+  -- sym/dagger/sublim each have their own independent panel
+
+
+  local function reposition_all(p, nx, ny)
+    local ngx = nx + SCH_PIP_OFFSET
+    p.bg:pos(ngx, ny)
+    for i = 1, SCH_MAX_PIPS do
+      local gpx = ngx + SCH_SLOT_XS[i] - math.floor(SCH_GEM_W / 2)
+      p.gems_on[i]:pos(gpx, ny + SCH_GEM_DY)
+      p.gems_off[i]:pos(gpx, ny + SCH_GEM_DY)
+    end
+    if sch_fused then sch_apply_fuse(nx, ny) end
+  end
+
+  local function hide_all_sch(p)
+    if p.bg    then p.bg:hide()    end
+    if p.gems_on  then for i = 1, SCH_MAX_PIPS do if p.gems_on[i]  then p.gems_on[i]:hide()  end end end
+    if p.gems_off then for i = 1, SCH_MAX_PIPS do if p.gems_off[i] then p.gems_off[i]:hide() end end end
+  end
+
+  panel.on_position_changed = reposition_all
+  panel.on_show    = function(p) p:render() end
+  panel.on_hide    = hide_all_sch
+  panel.on_destroy = hide_all_sch
+
+  -- Called from on_action when any recast_id-231 ability fires.
   function panel:note_charge_used()
-    local pd  = windower.ffxi.get_player()
-    local level = pd and (pd.main_job == 'SCH' and pd.main_job_level or pd.sub_job_level) or 0
-    local max = sch_max_charges(level or 0)
+    local pd    = windower.ffxi.get_player()
+    local level = pd and (pd.main_job_id == JOB_SCH and pd.main_job_level or pd.sub_job_id == JOB_SCH and pd.sub_job_level or 0) or 0
+    local max   = sch_max_charges(level or 0)
     if sch_used >= max then return end
     sch_used = sch_used + 1
     if sch_next_regen == nil then
@@ -211,43 +462,47 @@ local function create_sch_panel(x, y)
 
   function panel:render()
     if not self.visible then return end
-    local dark, addendum = false, false
+    -- skip if images.new failed mid-construction
+    if not self.gems_on or not self.bg then return end
     local pd = windower.ffxi.get_player()
-    if pd and pd.buffs then
-      for _, b in ipairs(pd.buffs) do
-        if b == 359 or b == SCH_ADDENDUM_BLACK_BUFF then dark = true end
-        if b == SCH_ADDENDUM_WHITE_BUFF or b == SCH_ADDENDUM_BLACK_BUFF then addendum = true end
-      end
-    end
-    local r, g, b = dark and 155 or 80, dark and 75 or 140, dark and 215 or 220
-    local level = pd and (pd.main_job == 'SCH' and pd.main_job_level or pd.sub_job_level) or 0
+    local level = pd and (pd.main_job_id == JOB_SCH and pd.main_job_level or pd.sub_job_id == JOB_SCH and pd.sub_job_level or 0) or 0
     local max   = sch_max_charges(level or 0)
     local cur   = max > 0 and sch_current_charges(pd, max) or 0
-    for i = 1, SCH_MAX_PIPS do
-      if i <= max then
-        if i <= cur then self.pips[i]:color(r,g,b); self.pips[i]:alpha(255)
-        else              self.pips[i]:color(35,35,35); self.pips[i]:alpha(130)
-        end
-        self.pips[i]:show()
-      else
-        self.pips[i]:hide()
+
+    -- Master toggle: hide everything and bail
+    if not sch_show_gauge then
+      self.bg:hide()
+      for i = 1, SCH_MAX_PIPS do
+        if self.gems_on[i]  then self.gems_on[i]:hide()  end
+        if self.gems_off[i] then self.gems_off[i]:hide() end
       end
+      return
     end
-    if addendum then
-      self.dagger:color(r, g, b); self.dagger:alpha(255); self.dagger:show()
-    else
-      self.dagger:hide()
+
+    if sch_show_gems then self.bg:show() else self.bg:hide() end
+
+    -- Gem pips
+    for i = 1, SCH_MAX_PIPS do
+      if sch_show_gems and i <= max and i <= cur then
+        self.gems_on[i]:show()
+      else
+        self.gems_on[i]:hide()
+      end
+      self.gems_off[i]:hide()
     end
+
+
+
   end
 
   return panel
 end
 
--- ── COR Phantom Roll gauge — two overlapping "playing cards" ─────────────────
+-- ── COR Phantom Roll gauge - two overlapping "playing cards" ─────────────────
 --
 -- Layout: two cards arranged like a hand, right card overlapping left.
--- All visuals are images.new({draggable=false}) — no texts.new() anywhere.
--- This is intentional: text objects in Windower set blocked=true before the
+-- All visuals are images.new({draggable=false}) - no texts.new() anywhere.
+-- text objects set blocked=true before the
 -- Lua mouse handler runs, permanently preventing content drag from working.
 -- Image objects with draggable=false never block events, matching how the
 -- lock button panel is built.
@@ -257,7 +512,7 @@ end
 -- This causes card2 to correctly overlay the overlap region of card1.
 
 -- Buff IDs from Windower/Resources/resources_data/buffs.lua
--- 309 = Bust (debuff) — excluded; active rolls are 310-338
+-- 309 = Bust (debuff) - excluded; active rolls are 310-338
 local COR_ROLL_BUFFS = {
   [310]='Fght', [311]='Mnk',  [312]='Heal', [313]='Wiz',  [314]='Wrlk',
   [315]='Rog',  [316]='Gal',  [317]='Chaos',[318]='Beast',[319]='Choral',
@@ -313,7 +568,7 @@ local function num_color(buff_id, n)
   return 255, 210, 60                                   -- normal  (gold)
 end
 
--- Card geometry — two tilted cards in a fanned hand.
+-- Card geometry - two tilted cards in a fanned hand.
 -- Back card (left):  card_back.png  60×74, rotated -12° (top leans left)
 -- Front card (right): card_front.png 52×68, rotated +4°  (top leans right)
 -- Panel origin is the top-left of the overall bounding box.
@@ -321,15 +576,15 @@ local BACK_W,  BACK_H  = 60, 74   -- card_back.png  dimensions
 local FRONT_W, FRONT_H = 52, 68   -- card_front.png dimensions
 local NUM_BW,  NUM_BH  = 44, 50   -- num_N_back.png dimensions
 local NUM_FW,  NUM_FH  = 40, 46   -- num_N_front.png dimensions
--- Roll-name labels — rendered the exact same way as the roll numbers: one
+-- Roll-name labels - rendered the exact same way as the roll numbers: one
 -- pre-rotated, pre-rendered white glyph image per roll name (matching the
 -- card's tilt), tinted at runtime via :color(). Images are used instead of
--- texts.new() for the same reason the numbers are — text objects set
+-- texts.new() for the same reason the numbers are - text objects set
 -- blocked=true before our Lua mouse handler runs, which would break drag.
 local NAME_BW, NAME_BH = 59, 32   -- name_<Key>_back.png  dimensions
 local NAME_FW, NAME_FH = 50, 20   -- name_<Key>_front.png dimensions
 local NAME_TOP_MARGIN  = 1        -- gap from the top edge of the card
--- Title color stays fixed (not luck-tinted like the number) — the baked-in
+-- Title color stays fixed (not luck-tinted like the number) - the baked-in
 -- dark outline (see image generation) does the contrast work against the
 -- white card art regardless of this tint.
 local NAME_COLOR_R, NAME_COLOR_G, NAME_COLOR_B = 235, 225, 200
@@ -374,7 +629,7 @@ local function make_num_img(which, n, x, y)
 end
 
 local function make_name_img(which, x, y)
-  -- which: 'back' or 'front'. No initial path — the roll name isn't known
+  -- which: 'back' or 'front'. No initial path - the roll name isn't known
   -- until a roll is active, so render() swaps the path via :path() the
   -- same way the lock button swaps between lock.png/unlock.png.
   local w   = which == 'back' and NAME_BW or NAME_FW
@@ -503,7 +758,7 @@ local function create_cor_panel(x, y)
   -- buff-id-keyed pending that scan_roll_buff assigns when the buff appears.
   function panel:apply_roll(buff_id, result, is_doubleup)
     if is_doubleup then
-      -- Double-Up never creates a new buff — it updates the existing one.
+      -- Double-Up never creates a new buff - it updates the existing one.
       -- Update in-place without waiting for a buff-change event.
       for _, r in ipairs(self.rolls) do
         if r.buff_id == buff_id then
@@ -557,7 +812,7 @@ local function create_cor_panel(x, y)
   return panel
 end
 
--- ── RUN Rune gauge — 3 rune tablets in an arch, recast ring below ───────────
+-- ── RUN Rune gauge - 3 rune tablets in an arch, recast ring below ───────────
 -- Buff IDs from Windower/Resources/resources_data/buffs.lua (523-530)
 local RUN_N = 3
 -- Each glyph image is final art with its element's color already baked in
@@ -577,33 +832,33 @@ local RUNE_GLYPH = {
 -- each render with no client-side ledger needed.
 --
 -- The duration isn't hardcoded since it varies with gear/JP; it's learned
--- from the live value instead — run_recast_full is captured the moment a
+-- from the live value instead - run_recast_full is captured the moment a
 -- fresh use is detected (remaining jumping up from a lower value).
 local RUN_RUNE_RECAST_ID  = 10
 local RUN_RECAST_FALLBACK = 5  -- best guess before any use is observed this session
 
-local RUN_TABLET_W, RUN_TABLET_H = 56, 56   -- was 24x24 — too small to read in-game
+local RUN_TABLET_W, RUN_TABLET_H = 56, 56   -- was 24x24 - too small to read in-game
 -- Glyphs render at the SAME size/position as a 56×56 tile slot, not a
 -- smaller inset icon: the arch art's sockets were carved at this exact
 -- tile size/spacing (see images/other/runes/rune_arch.png's generator),
 -- so a glyph centered on a tile lands dead-center in its socket.
 --
--- All 3 slots use the same plain glyph art now — no per-slot _left/_right
+-- All 3 slots use the same plain glyph art now - no per-slot _left/_right
 -- variant. An earlier version leaned the outer two glyphs inward to match
 -- the socket's tilt, but that meant 16 extra rotated files the renderer
 -- depended on; a missing/bad one is exactly what showed up in-game as a
 -- plain white square in the left socket (Windower's fallback for a
 -- texture that failed to load). Not worth the fragility for a subtle tilt.
-local RUN_TABLET_GAP   = 20   -- was 9 — scaled with the tablets so spacing stays proportional
+local RUN_TABLET_GAP   = 20   -- was 9 - scaled with the tablets so spacing stays proportional
 local RUN_TABLET_SPACE = RUN_TABLET_W + RUN_TABLET_GAP
-local RUN_ARCH_DY      = 32   -- was 10 — how much higher the centre slot sits
-local RUN_ROW_GAP      = 16   -- was 9 — gap between the arch and the ring below
+local RUN_ARCH_DY      = 32   -- was 10 - how much higher the centre slot sits
+local RUN_ROW_GAP      = 16   -- was 9 - gap between the arch and the ring below
 
 -- True 5-segment donut ring (ring_seg1.png..ring_seg5.png), replacing the
 -- old 10-dot-pip placeholder. Each segment file is a full-diameter canvas
 -- with one pre-rotated wedge baked in (this codebase never rotates images
--- at runtime — see the pre-rotated COR cards and the hotbar's cooldown
--- sweep frame sequence — so all 5 stack at the SAME on-screen position to
+-- at runtime - see the pre-rotated COR cards and the hotbar's cooldown
+-- sweep frame sequence - so all 5 stack at the SAME on-screen position to
 -- compose the complete ring, rather than each needing its own x/y like the
 -- old dots did).
 local RUN_RING_SEGMENTS = 5
@@ -614,13 +869,13 @@ local RUN_W       = 3*RUN_TABLET_W + 2*RUN_TABLET_GAP
 local RUN_RING_CX = RUN_W / 2
 local RUN_RING_CY = (RUN_TABLET_H + RUN_ARCH_DY) + RUN_ROW_GAP + RUN_RING_SIZE/2
 
--- The arch art is now a full Romanesque archway — the band sweeps all the
+-- The arch art is now a full Romanesque archway - the band sweeps all the
 -- way down to a vertical tangent on each side (a true circular arc through
 -- the 3 sockets, extended to 90°), then continues as a short straight
 -- pillar stub carrying a carved relief panel and a glowing diamond-chain
 -- inlay (see the generator for the geometry). Because the curve bulges out
 -- further than the old shallow-dome version, the art's bounding box isn't
--- centred the same way on each axis — these offsets come straight out of
+-- centred the same way on each axis - these offsets come straight out of
 -- the generator's computed origin, not a hand-picked margin.
 local RUN_ARCH_OFFSET_X = 41.25   -- art's left edge, left of the tile anchor
 local RUN_ARCH_OFFSET_Y = 11.0    -- art's top edge, above the tile anchor
@@ -628,7 +883,7 @@ local RUN_ARCH_W = 290.5
 local RUN_ARCH_H = 314.25
 
 -- The pillars now run far enough down that the arch image's own bounding
--- box already covers the recast ring beneath it — no extra height needed
+-- box already covers the recast ring beneath it - no extra height needed
 -- in the panel's drag hitbox for the ring the way the old shallow dome
 -- required. Panel x/y is the art's top-left.
 local RUN_PANEL_W = RUN_ARCH_W
@@ -661,7 +916,7 @@ local function make_ring_segment(n)
   return img
 end
 
--- Every wedge shares the same bounding-box position — the wedge shape
+-- Every wedge shares the same bounding-box position - the wedge shape
 -- itself (pre-rotated into the image) is what puts it at the right spot
 -- around the ring, not an x/y offset.
 local function run_ring_pos(bx, by)
@@ -780,7 +1035,16 @@ local dnc_panel, sch_panel, cor_panel, run_panel
 -- discrete events like an ability use or buff change.
 local gauge_refresh_frame = 0
 windower.register_event('prerender', function()
-  if not sch_panel and not run_panel then return end
+  -- Dagger slide-in animation (runs every frame until complete)
+  if sch_dagger_panel and sch_dagger_panel.dagger and sch_dagger_anim_frame < SCH_DAGGER_ANIM_TOTAL then
+    sch_dagger_anim_frame = sch_dagger_anim_frame + 1
+    local t    = sch_dagger_anim_frame / SCH_DAGGER_ANIM_TOTAL
+    local ease = t * t * (3 - 2 * t)
+    sch_dagger_panel.dagger:pos(sch_dagger_panel.x,
+      math.floor(sch_dagger_panel.y - SCH_DAGGER_SLIDE_PX * (1 - ease)))
+  end
+  -- Periodic state refresh (every 15 frames)
+  if not sch_panel and not sch_sym_panel and not sch_dagger_panel and not sch_sublim_panel and not run_panel then return end
   gauge_refresh_frame = gauge_refresh_frame + 1
   if gauge_refresh_frame % 15 == 0 then
     if sch_panel then sch_panel:render() end
@@ -794,6 +1058,9 @@ end)
 function utility_gauges:teardown()
   if dnc_panel then dnc_panel:destroy(); dnc_panel = nil end
   if sch_panel then sch_panel:destroy(); sch_panel = nil end
+  if sch_sym_panel then sch_sym_panel:destroy(); sch_sym_panel = nil end
+  if sch_dagger_panel then sch_dagger_panel:destroy(); sch_dagger_panel = nil end
+  if sch_sublim_panel then sch_sublim_panel:destroy(); sch_sublim_panel = nil end
   if cor_panel then cor_panel:destroy(); cor_panel = nil end
   if run_panel then run_panel:destroy(); run_panel = nil end
 end
@@ -820,10 +1087,37 @@ function utility_gauges:setup(player_obj, settings, default_x, default_y)
     dnc_panel:render(player_obj.finishing_moves or 0)
   end
 
+  -- SCH visibility state
+  local _sv = settings and settings.Utility and settings.Utility.SCHGauge or {}
+  sch_show_gauge  = _sv.Show       ~= false
+  sch_show_gems   = _sv.ShowGems   ~= false
+  sch_show_strats = _sv.ShowStrats ~= false
+  sch_show_sublim = _sv.ShowSublim ~= false
+  sch_show_dagger = _sv.ShowDagger ~= false
+
   if has_job(player_obj, JOB_SCH) then
-    local x, y = resolve_pos('SCH', PIP_H)
-    sch_panel = create_sch_panel(x, y)
-    sch_panel:render()
+    local x, y = resolve_pos('SCH', SCH_GAUGE_H)
+    local _ok, _res = pcall(create_sch_panel, x, y)
+    if _ok then
+      sch_panel = _res
+      local _rok, _rerr = pcall(function() sch_panel:render() end)
+      if not _rok then
+        windower.add_to_chat(167, '[SCH] render() error: ' .. tostring(_rerr))
+      end
+    else
+      windower.add_to_chat(167, '[SCH] create_sch_panel error: ' .. tostring(_res))
+    end
+    -- stored independent positions (restored on unfuse)
+    local _sdv=gset['SCHDagger'] or {}; sch_dagger_ind_x,sch_dagger_ind_y=_sdv.OffsetX or 0,_sdv.OffsetY or 0
+    local _slv=gset['SCHSublim'] or {}; sch_sublim_ind_x,sch_sublim_ind_y=_slv.OffsetX or 0,_slv.OffsetY or 0
+    local _ssv=gset['SCHSyms']   or {}; sch_sym_ind_x,   sch_sym_ind_y   =_ssv.OffsetX or 0,_ssv.OffsetY or 0
+    -- start fused; unfuse now if gems were saved as hidden
+    local _fdx,_fdy,_fsx,_fsy,_fslx,_fsly = sch_fuse_positions(x, y)
+    sch_dagger_panel = create_sch_dagger_panel(_fdx, _fdy);  sch_dagger_panel:render()
+    sch_sublim_panel = create_sch_sublim_panel(_fslx,_fsly); sch_sublim_panel:render()
+    sch_sym_panel    = create_sch_sym_panel(_fsx, _fsy);     sch_sym_panel:render()
+    sch_fused = true
+    if not sch_show_gems then sch_apply_unfuse() end
   end
 
   if has_job(player_obj, JOB_COR) then
@@ -842,8 +1136,60 @@ end
 function utility_gauges:update_all(player_obj)
   if dnc_panel then dnc_panel:render(player_obj.finishing_moves) end
   if sch_panel then sch_panel:render() end
+  if sch_sym_panel then sch_sym_panel:render() end
+  if sch_dagger_panel then sch_dagger_panel:render() end
+  if sch_sublim_panel then sch_sublim_panel:render() end
   if cor_panel then cor_panel:scan_roll_buff() end
   if run_panel then run_panel:render() end
+end
+
+function utility_gauges:toggle_sch(flag, settings_ref)
+  if flag == 'gauge' then
+    sch_show_gauge = not sch_show_gauge
+    if sch_panel then sch_panel:render() end
+    if sch_sym_panel    then if sch_show_gauge then sch_sym_panel:show()    else sch_sym_panel:hide()    end end
+    if sch_dagger_panel then if sch_show_gauge then sch_dagger_panel:show()  else sch_dagger_panel:hide()  end end
+    if sch_sublim_panel then if sch_show_gauge then sch_sublim_panel:show()  else sch_sublim_panel:hide()  end end
+    return sch_show_gauge
+  elseif flag == 'gems' then
+    sch_show_gems = not sch_show_gems
+    if sch_panel then sch_panel:render() end
+    if sch_show_gems then
+      -- fuse: lock sub-panels onto gem-gauge-relative positions
+      sch_fused = true
+      if sch_panel then sch_apply_fuse(sch_panel.x, sch_panel.y) end
+      self:set_edit_mode(sch_edit_active)
+    else
+      -- unfuse: restore sub-panels to their last independent positions
+      sch_apply_unfuse()
+    end
+    return sch_show_gems
+  elseif flag == 'strats' then
+    sch_show_strats = not sch_show_strats
+    if sch_sym_panel then sch_sym_panel:render() end
+    self:set_edit_mode(sch_edit_active)
+    return sch_show_strats
+  elseif flag == 'sublim' then
+    sch_show_sublim = not sch_show_sublim
+    if sch_sublim_panel then sch_sublim_panel:render() end
+    self:set_edit_mode(sch_edit_active)
+    return sch_show_sublim
+  elseif flag == 'dagger' then
+    sch_show_dagger = not sch_show_dagger
+    if sch_dagger_panel then sch_dagger_panel:render() end
+    self:set_edit_mode(sch_edit_active)
+    return sch_show_dagger
+  end
+end
+
+function utility_gauges:save_sch_visibility(settings_ref)
+  settings_ref.Utility             = settings_ref.Utility or {}
+  settings_ref.Utility.SCHGauge   = settings_ref.Utility.SCHGauge or {}
+  settings_ref.Utility.SCHGauge.Show       = sch_show_gauge
+  settings_ref.Utility.SCHGauge.ShowGems   = sch_show_gems
+  settings_ref.Utility.SCHGauge.ShowStrats = sch_show_strats
+  settings_ref.Utility.SCHGauge.ShowSublim = sch_show_sublim
+  settings_ref.Utility.SCHGauge.ShowDagger = sch_show_dagger
 end
 
 function utility_gauges:on_action(act)
@@ -852,10 +1198,7 @@ function utility_gauges:on_action(act)
   if not pid or act.actor_id ~= pid.id then return end
 
   if sch_panel and act.category == 6 and act.param then
-    -- Any job ability sharing the Stratagem recast group (Addendum, Penury,
-    -- Parsimony, Celerity, Alacrity, Klimaform, etc.) consumes a charge.
-    -- Checking the shared recast_id rather than a hardcoded ability list
-    -- means this stays correct even for abilities added/changed later.
+    -- charge tracking only; symbol display reads pd.buffs in render()
     local ab = resources.job_abilities[act.param]
     if ab and ab.recast_id == SCH_STRAT_RECAST_ID then
       sch_panel:note_charge_used()
@@ -863,12 +1206,9 @@ function utility_gauges:on_action(act)
   end
 
   if cor_panel and act.category == 6 and act.targets then
-    -- Parse using the same approach as AutoCOR (Ivaar/Windower-addons):
-    --   message 420 = Phantom Roll (new roll)
-    --   message 424 = Double-Up on existing roll
-    --   act.param is the ability's resource ID -- see COR_ROLL_PARAMS for
-    --   how that maps to a buff_id (it's not the uniform "+212" it looks
-    --   like at a glance; that only holds for part of the roll list).
+    -- msg 420 = new roll, 424 = double-up
+    -- act.param is the ability ID; COR_ROLL_PARAMS maps it to a buff_id
+    -- (not uniform +212 - that formula breaks for several rolls)
     local roll_result, is_doubleup
     for _, tgt in ipairs(act.targets) do
       if tgt.actions then
@@ -894,10 +1234,15 @@ end
 
 function utility_gauges:handle_mouse(ev_type, x, y)
   -- Explicit guards mirror how the lock panel is called.  DO NOT use
-  -- ipairs({dnc_panel, ...}) — ipairs stops at the first nil, so any panel
+  -- ipairs({dnc_panel, ...}) - ipairs stops at the first nil, so any panel
   -- after a missing job gauge would be silently skipped.
   if dnc_panel and dnc_panel:on_mouse(ev_type, x, y) ~= nil then return true end
   if sch_panel and sch_panel:on_mouse(ev_type, x, y) ~= nil then return true end
+  if not sch_fused and sch_show_gauge then
+    if sch_sym_panel    and sch_show_strats  and sch_sym_panel:on_mouse(ev_type,x,y)    ~= nil then return true end
+    if sch_dagger_panel and sch_show_dagger  and sch_dagger_panel:on_mouse(ev_type,x,y) ~= nil then return true end
+    if sch_sublim_panel and sch_show_sublim  and sch_sublim_panel:on_mouse(ev_type,x,y) ~= nil then return true end
+  end
   if cor_panel and cor_panel:on_mouse(ev_type, x, y) ~= nil then return true end
   if run_panel and run_panel:on_mouse(ev_type, x, y) ~= nil then return true end
   return false
@@ -905,13 +1250,23 @@ end
 
 function utility_gauges:on_buff_change()
   if sch_panel then sch_panel:render() end
+  if sch_sym_panel then sch_sym_panel:render() end
+  if sch_dagger_panel then sch_dagger_panel:render() end
+  if sch_sublim_panel then sch_sublim_panel:render() end
   if cor_panel then cor_panel:scan_roll_buff() end
   if run_panel then run_panel:render() end
 end
 
 function utility_gauges:set_edit_mode(active)
+  sch_edit_active = active
   if dnc_panel then dnc_panel:set_edit_mode(active) end
-  if sch_panel then sch_panel:set_edit_mode(active) end
+  -- gem panel: grip only when gauge background is visible
+  if sch_panel then sch_panel:set_edit_mode(active and sch_show_gems and sch_show_gauge) end
+  -- sub-panels: grip only when unfused and their element is shown
+  local sub = active and not sch_fused and sch_show_gauge
+  if sch_sym_panel    then sch_sym_panel:set_edit_mode(sub and sch_show_strats)    end
+  if sch_dagger_panel then sch_dagger_panel:set_edit_mode(sub and sch_show_dagger)  end
+  if sch_sublim_panel then sch_sublim_panel:set_edit_mode(sub and sch_show_sublim)  end
   if cor_panel then cor_panel:set_edit_mode(active) end
   if run_panel then run_panel:set_edit_mode(active) end
 end
@@ -919,6 +1274,9 @@ end
 function utility_gauges:hide_all()
   if dnc_panel then dnc_panel:hide() end
   if sch_panel then sch_panel:hide() end
+  if sch_sym_panel then sch_sym_panel:hide() end
+  if sch_dagger_panel then sch_dagger_panel:hide() end
+  if sch_sublim_panel then sch_sublim_panel:hide() end
   if cor_panel then cor_panel:hide() end
   if run_panel then run_panel:hide() end
 end
@@ -926,6 +1284,9 @@ end
 function utility_gauges:show_all()
   if dnc_panel then dnc_panel:show() end
   if sch_panel then sch_panel:show() end
+  if sch_sym_panel then sch_sym_panel:show() end
+  if sch_dagger_panel then sch_dagger_panel:show() end
+  if sch_sublim_panel then sch_sublim_panel:show() end
   if cor_panel then cor_panel:show() end
   if run_panel then run_panel:show() end
 end
@@ -938,6 +1299,11 @@ function utility_gauges:save_positions(settings)
     if panel and g[key] then g[key].OffsetX = panel.x; g[key].OffsetY = panel.y end
   end
   save(dnc_panel,'DNC'); save(sch_panel,'SCH')
+  if not sch_fused then
+    save(sch_sym_panel,'SCHSyms');      if sch_sym_panel    then sch_sym_ind_x,    sch_sym_ind_y    = sch_sym_panel.x,    sch_sym_panel.y    end
+    save(sch_dagger_panel,'SCHDagger'); if sch_dagger_panel then sch_dagger_ind_x, sch_dagger_ind_y = sch_dagger_panel.x, sch_dagger_panel.y end
+    save(sch_sublim_panel,'SCHSublim'); if sch_sublim_panel then sch_sublim_ind_x, sch_sublim_ind_y = sch_sublim_panel.x, sch_sublim_panel.y end
+  end
   save(cor_panel,'COR'); save(run_panel,'RUN')
 end
 

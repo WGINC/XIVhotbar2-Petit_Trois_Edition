@@ -308,7 +308,7 @@ local function toggle_edit_mode()
   if state.demo then
     log(
       "Layout mode enabled! Drag slot icons to swap actions. Drag between rows to reposition bars. Click the unlock button (or //htb move) to save and exit.")
-    print('XIVHOTBAR2: Layout mode enabled')
+    if ui.theme.dev_mode then print('XIVHOTBAR2: Layout mode enabled') end
     move_box:enable()
     ui:update_edit_button(true)
     if ui.lock_panel then ui.lock_panel:set_edit_mode(true) end
@@ -328,7 +328,7 @@ local function toggle_edit_mode()
     utility_gauges:set_edit_mode(false)
     utility_gauges:save_positions(settings)
     save_all_hotbars()
-    print('XIVHOTBAR2: Layout mode disabled, writing new positions to settings.xml.')
+    if ui.theme.dev_mode then print('XIVHOTBAR2: Layout mode disabled, writing new positions to settings.xml.') end
     move_box:disable()
     ui:update_edit_button(false)
     ui.action_picker:close()
@@ -392,6 +392,23 @@ windower.register_event('addon command', function(command, ...)
     change_active_hotbar(tonumber(args[1]))
     if tonumber(args[2]) <= theme_options.columns then
       trigger_action(tonumber(args[2]))
+    end
+  elseif command == 'sch' then
+    local sub    = args[1] and args[1]:lower()
+    local labels = {gauge='Gauge',gems='Gem pips',strats='Stratagem tracker',sublim='Sublimation indicator',dagger='Addendum dagger'}
+    local valid  = {gauge=true,gems=true,strats=true,sublim=true,dagger=true}
+    if not sub or not valid[sub] then
+      log('[XIVHotbar2] SCH toggles: //htb sch gauge | gems | strats | sublim')
+      log('[XIVHotbar2]   gauge  — master on/off (persists)')
+      log('[XIVHotbar2]   gems   — stratagem charge pips')
+      log('[XIVHotbar2]   strats — stratagem symbol tracker')
+      log('[XIVHotbar2]   sublim  — sublimation indicator')
+      log('[XIVHotbar2]   dagger  — addendum dagger')
+    else
+      local state = utility_gauges:toggle_sch(sub)
+      log(('[XIVHotbar2] SCH %s: %s'):format(labels[sub], state and 'shown' or 'hidden'))
+      utility_gauges:save_sch_visibility(settings)
+      config.save(settings)
     end
   elseif command == 'move' then
     toggle_edit_mode()
