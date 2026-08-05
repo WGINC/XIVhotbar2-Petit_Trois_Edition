@@ -299,6 +299,9 @@ defaults.Utility.SCHGauge.ShowStrats = true
 defaults.Utility.SCHGauge.ShowSublim = true
 defaults.Utility.SCHGauge.ShowDagger = true
 
+defaults.Accessibility = {}
+defaults.Accessibility.ColorblindMode = 'off'  -- off | colorblind | grayscale
+
 defaults.Dev = {}
 defaults.Dev.DevMode = false
 defaults.Keybinds = {}

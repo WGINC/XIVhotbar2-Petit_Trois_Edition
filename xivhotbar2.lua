@@ -394,6 +394,15 @@ windower.register_event('addon command', function(command, ...)
       trigger_action(tonumber(args[2]))
     end
   elseif command == 'sch' then
+    if args[1] and args[1]:lower() == 'a11y' then
+      local mode   = args[2] and args[2]:lower() or 'off'
+      local actual = utility_gauges:set_colorblind_mode(mode)
+      settings.Accessibility = settings.Accessibility or {}
+      settings.Accessibility.ColorblindMode = actual
+      config.save(settings)
+      log('[XIVHotbar2] SCH accessibility mode: ' .. actual)
+      return
+    end
     local sub    = args[1] and args[1]:lower()
     local labels = {gauge='Gauge',gems='Gem pips',strats='Stratagem tracker',sublim='Sublimation indicator',dagger='Addendum dagger'}
     local valid  = {gauge=true,gems=true,strats=true,sublim=true,dagger=true}

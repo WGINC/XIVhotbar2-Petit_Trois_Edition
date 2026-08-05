@@ -172,6 +172,38 @@ end
 local sch_used       = 0
 local sch_next_regen = nil
 
+-- ── Accessibility / colorblind palette ───────────────────────────────────────
+-- 'colorblind' covers red-green deficiency (deuteranopia, protanopia).
+-- All keys: light_arts, dark_arts, sublim_charge, sublim_ready
+local SCH_PALETTE = {
+  off = {
+    light_arts    = {80,  140, 220},   -- blue   / Light Arts
+    dark_arts     = {155,  75, 215},   -- purple / Dark Arts
+    sublim_charge = {255,  80,  60},   -- red    (HP draining)
+    sublim_ready  = { 60, 220, 100},   -- green  (pool full)
+  },
+  colorblind = {
+    light_arts    = { 30, 140, 255},   -- blue
+    dark_arts     = {255, 165,   0},   -- amber
+    sublim_charge = {255, 165,   0},   -- amber  (draining)
+    sublim_ready  = { 30, 140, 255},   -- blue   (ready)
+  },
+  grayscale = {
+    light_arts    = {230, 230, 230},
+    dark_arts     = {110, 110, 110},
+    sublim_charge = {150, 150, 150},
+    sublim_ready  = {255, 255, 255},
+  },
+}
+
+local sch_a11y_mode = 'off'
+
+local function sch_pal(key)
+  local p = SCH_PALETTE[sch_a11y_mode] or SCH_PALETTE.off
+  local c = p[key] or SCH_PALETTE.off[key]
+  return c[1], c[2], c[3]
+end
+
 local function sch_max_charges(level)
   if     level >= 90 then return 5
   elseif level >= 70 then return 4
@@ -330,7 +362,7 @@ local function create_sch_dagger_panel(x, y)
         if b == SCH_ADDENDUM_WHITE_BUFF or b == SCH_ADDENDUM_BLACK_BUFF then addendum = true end
       end
     end
-    local dr, dg, db = dark and 155 or 80, dark and 75 or 140, dark and 215 or 220
+    local dr, dg, db = sch_pal(dark and 'dark_arts' or 'light_arts')
     local was = sch_addendum_prev
     sch_addendum_prev = addendum
     if addendum and sch_show_dagger and sch_show_gauge then
@@ -386,9 +418,22 @@ local function create_sch_sublim_panel(x, y)
         if s == 'charge' then state = 'charge' end
       end
     end
-    if     state == 'ready'  then self.sublim:color(60,220,100); self.sublim:alpha(255); self.sublim:show()
-    elseif state == 'charge' then self.sublim:color(255,80,60);  self.sublim:alpha(255); self.sublim:show()
-    else                          self.sublim:hide()
+    -- ∮ (contour integral) only while charging in an a11y mode; ∫ otherwise
+    local icon = (sch_a11y_mode ~= 'off' and state == 'charge')
+                 and 'sch_sublim_a11y.png' or 'sch_sublim.png'
+    if self._sublim_icon ~= icon then
+      self.sublim:path(windower.addon_path .. '/images/sch/' .. icon)
+      self.sublim:size(SCH_SUBLIM_W, SCH_SUBLIM_H)  -- path() resets size; restore
+      self._sublim_icon = icon
+    end
+    if state == 'ready' then
+      local r,g,b = sch_pal('sublim_ready')
+      self.sublim:color(r,g,b); self.sublim:alpha(255); self.sublim:show()
+    elseif state == 'charge' then
+      local r,g,b = sch_pal('sublim_charge')
+      self.sublim:color(r,g,b); self.sublim:alpha(255); self.sublim:show()
+    else
+      self.sublim:hide()
     end
   end
   return panel
@@ -1088,6 +1133,8 @@ function utility_gauges:setup(player_obj, settings, default_x, default_y)
   end
 
   -- SCH visibility state
+  local _av = settings and settings.Accessibility or {}
+  sch_a11y_mode = SCH_PALETTE[_av.ColorblindMode or ''] and _av.ColorblindMode or 'off'
   local _sv = settings and settings.Utility and settings.Utility.SCHGauge or {}
   sch_show_gauge  = _sv.Show       ~= false
   sch_show_gems   = _sv.ShowGems   ~= false
@@ -1141,6 +1188,13 @@ function utility_gauges:update_all(player_obj)
   if sch_sublim_panel then sch_sublim_panel:render() end
   if cor_panel then cor_panel:scan_roll_buff() end
   if run_panel then run_panel:render() end
+end
+
+function utility_gauges:set_colorblind_mode(mode)
+  sch_a11y_mode = SCH_PALETTE[mode] and mode or 'off'
+  if sch_dagger_panel then sch_dagger_panel:render() end
+  if sch_sublim_panel then sch_sublim_panel:render() end
+  return sch_a11y_mode
 end
 
 function utility_gauges:toggle_sch(flag, settings_ref)
