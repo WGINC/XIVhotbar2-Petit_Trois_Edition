@@ -466,7 +466,15 @@ local function create_sch_panel(x, y)
 
   local panel = utility_panel:new(x, y, SCH_PIP_OFFSET + SCH_GAUGE_W, SCH_GAUGE_H)
   panel.content_draggable = true
-  panel.cur_max = 5
+  -- Deliberately NOT pre-set to 5.  This panel gets recreated on arts/
+  -- addendum changes (see module header); if it started already "at" the
+  -- player's true max, render()'s `max ~= self.cur_max` change-detection
+  -- would silently skip apply_max() on that first render whenever the
+  -- true max happened to be 5, leaving the module-level sch_cur_max
+  -- (which the dagger/sym/sublim fuse math reads) stuck on a stale value
+  -- from before the recreation.  nil never equals a real max, so the
+  -- first render always runs apply_max() and re-syncs everything.
+  panel.cur_max = nil
 
   -- Gauge background (path/size swapped per current max by apply_max())
   local bg = images.new({draggable=false, texture={fit=false}})
@@ -498,7 +506,7 @@ local function create_sch_panel(x, y)
   -- except for the single-charge case, which gets a narrow grip bar
   -- centred over that one gem instead of the full-width bar.
   -- Guarded by render() to only run on actual change (level up, subjob
-  -- swap, JP threshold cross, zoning, etc).
+  -- swap, JP threshold cross, zoning, panel recreation, etc).
   local function apply_max(p, nx, ny, max)
     max = math.max(max, 0)
     local ngx = nx + SCH_PIP_OFFSET
@@ -579,8 +587,8 @@ local function create_sch_panel(x, y)
     local max   = sch_max_charges(level or 0)
     local cur   = max > 0 and sch_current_charges(pd, max) or 0
 
-    -- Charge cap changed (level up, subjob swap, zone, etc) - rebuild
-    -- the gauge at its new width before drawing.
+    -- Charge cap changed (level up, subjob swap, zone, panel recreation,
+    -- etc) - rebuild the gauge at its new width before drawing.
     if max ~= self.cur_max then
       apply_max(self, self.x, self.y, max)
     end
