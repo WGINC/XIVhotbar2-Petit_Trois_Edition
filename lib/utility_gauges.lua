@@ -124,12 +124,33 @@ local sch_show_dagger  = true
 local sch_sym_panel    = nil
 
 -- gem gauge  display px; source PNGs 2×
+-- Background art swaps to a matching N-gem asset based on the player's
+-- actual max stratagem charges (see sch_max_charges()) instead of always
+-- showing a fixed 5-slot frame.  Slot x-positions stay hardcoded.
 local SCH_GAUGE_W = 235
 local SCH_GAUGE_H = 77
 local SCH_GEM_W   = 46
 local SCH_GEM_H   = 46
 local SCH_SLOT_XS = {38, 76, 114, 152, 190}
 local SCH_GEM_DY  = 14    -- gem top: slot_centre_y(40) - half_gem(23) ≈ 14
+
+-- gauge_w(n) = n*38 + 45  (n=5 -> 235, i.e. the original SCH_GAUGE_W)
+local function sch_gauge_width(n) return n * 38 + 45 end
+
+local function sch_bg_path(n)
+  if n >= 5 then return windower.addon_path .. '/images/sch/sch_gauge_bg.png' end
+  return windower.addon_path .. '/images/sch/sch_gauge_bg_' .. n .. '.png'
+end
+
+-- current gauge width in px; used by the symbol row / dagger / sublimation
+-- fuse positions so they stay anchored to the gauge's actual current width.
+local sch_cur_max = 5
+local function sch_cur_gauge_w() return sch_gauge_width(math.max(sch_cur_max, 1)) end
+
+-- Mirrors utility_panel's own private GRIP_H/GRIP_GAP - needed here only
+-- to hand-position the narrow single-gem grip case below.
+local SCH_GRIP_H   = 10
+local SCH_GRIP_GAP = 2
 
 -- stratagem symbols  source 60×60, display 32×32
 -- light/dark pairs share slot positions 0–6; only one set visible at a time
@@ -163,9 +184,9 @@ local SCH_STRAT_IDX = {}
 for i, v in ipairs(SCH_STRAT_LIST) do SCH_STRAT_IDX[v[1]] = i end
 local SCH_BUFF_TO_STRAT_CACHE = {}  -- buff_id → name; filled on first render
 
--- symbol row x-start, centred over the gauge background
+-- symbol row x-start, centred over the gauge background's current width
 local function sch_sym_x0(gx)
-  return gx + math.floor((SCH_GAUGE_W - (7*SCH_SYM_W + 6*SCH_SYM_HGAP)) / 2)
+  return gx + math.floor((sch_cur_gauge_w() - (7*SCH_SYM_W + 6*SCH_SYM_HGAP)) / 2)
 end
 
 -- module-scope: survives panel recreation on arts/addendum changes
@@ -245,12 +266,13 @@ local function make_dagger(x, y)
 end
 
 local function sch_fuse_positions(gem_x, gem_y)
-  local row_w = 7*SCH_SYM_W + 6*SCH_SYM_HGAP
-  local gx    = gem_x + SCH_PIP_OFFSET
+  local gauge_w = sch_cur_gauge_w()
+  local row_w   = 7*SCH_SYM_W + 6*SCH_SYM_HGAP
+  local gx      = gem_x + SCH_PIP_OFFSET
   return gem_x, gem_y + math.floor((SCH_GAUGE_H-SCH_DAGGER_H)/2),
-         gem_x + SCH_PIP_OFFSET + math.floor((SCH_GAUGE_W-row_w)/2),
+         gem_x + SCH_PIP_OFFSET + math.floor((gauge_w-row_w)/2),
          gem_y - SCH_SYM_H - SCH_SYM_VOFFSET,
-         gx + SCH_GAUGE_W + SCH_SUBLIM_GAP,
+         gx + gauge_w + SCH_SUBLIM_GAP,
          gem_y + math.floor((SCH_GAUGE_H-SCH_SUBLIM_H)/2)
 end
 local function sch_apply_fuse(gem_x, gem_y)
@@ -444,8 +466,9 @@ local function create_sch_panel(x, y)
 
   local panel = utility_panel:new(x, y, SCH_PIP_OFFSET + SCH_GAUGE_W, SCH_GAUGE_H)
   panel.content_draggable = true
+  panel.cur_max = 5
 
-  -- Gauge background
+  -- Gauge background (path/size swapped per current max by apply_max())
   local bg = images.new({draggable=false, texture={fit=false}})
   bg:path(windower.addon_path .. '/images/sch/sch_gauge_bg.png')
   bg:fit(false); bg:size(SCH_GAUGE_W, SCH_GAUGE_H); bg:pos(gx, y); bg:show()
@@ -470,6 +493,42 @@ local function create_sch_panel(x, y)
 
   -- sym/dagger/sublim each have their own independent panel
 
+  -- Resize bg + reposition gem slots for a given max charge count.  The
+  -- panel's own width/grip is left alone (same grip as always existed)
+  -- except for the single-charge case, which gets a narrow grip bar
+  -- centred over that one gem instead of the full-width bar.
+  -- Guarded by render() to only run on actual change (level up, subjob
+  -- swap, JP threshold cross, zoning, etc).
+  local function apply_max(p, nx, ny, max)
+    max = math.max(max, 0)
+    local ngx = nx + SCH_PIP_OFFSET
+    local w   = sch_gauge_width(math.max(max, 1))
+    p.bg:path(sch_bg_path(math.max(max, 1)))
+    p.bg:size(w, SCH_GAUGE_H)
+    p.bg:pos(ngx, ny)
+    for i = 1, SCH_MAX_PIPS do
+      if i <= max then
+        local gpx = ngx + SCH_SLOT_XS[i] - math.floor(SCH_GEM_W / 2)
+        p.gems_on[i]:pos(gpx, ny + SCH_GEM_DY)
+        p.gems_off[i]:pos(gpx, ny + SCH_GEM_DY)
+      else
+        p.gems_on[i]:hide()
+        p.gems_off[i]:hide()
+      end
+    end
+    if max == 1 then
+      local slot_cx = ngx + SCH_SLOT_XS[1]
+      p.grip_img:size(SCH_GEM_W, SCH_GRIP_H)
+      p.grip_img:pos(slot_cx - math.floor(SCH_GEM_W/2), ny - SCH_GRIP_H - SCH_GRIP_GAP)
+    else
+      p.grip_img:size(p.w, SCH_GRIP_H)
+      p.grip_img:pos(nx, ny - SCH_GRIP_H - SCH_GRIP_GAP)
+    end
+    p.cur_max   = max
+    sch_cur_max = math.max(max, 1)
+    if sch_fused then sch_apply_fuse(nx, ny) end
+  end
+  panel.apply_max = apply_max
 
   local function reposition_all(p, nx, ny)
     local ngx = nx + SCH_PIP_OFFSET
@@ -478,6 +537,12 @@ local function create_sch_panel(x, y)
       local gpx = ngx + SCH_SLOT_XS[i] - math.floor(SCH_GEM_W / 2)
       p.gems_on[i]:pos(gpx, ny + SCH_GEM_DY)
       p.gems_off[i]:pos(gpx, ny + SCH_GEM_DY)
+    end
+    -- utility_panel:set_position() already repositioned grip_img at full
+    -- panel width/nx; re-centre it for the single-gem narrow-grip case.
+    if p.cur_max == 1 then
+      local slot_cx = ngx + SCH_SLOT_XS[1]
+      p.grip_img:pos(slot_cx - math.floor(SCH_GEM_W/2), ny - SCH_GRIP_H - SCH_GRIP_GAP)
     end
     if sch_fused then sch_apply_fuse(nx, ny) end
   end
@@ -514,8 +579,14 @@ local function create_sch_panel(x, y)
     local max   = sch_max_charges(level or 0)
     local cur   = max > 0 and sch_current_charges(pd, max) or 0
 
-    -- Master toggle: hide everything and bail
-    if not sch_show_gauge then
+    -- Charge cap changed (level up, subjob swap, zone, etc) - rebuild
+    -- the gauge at its new width before drawing.
+    if max ~= self.cur_max then
+      apply_max(self, self.x, self.y, max)
+    end
+
+    -- Master toggle, or not yet unlocked (sub-lv10): hide everything and bail
+    if not sch_show_gauge or max <= 0 then
       self.bg:hide()
       for i = 1, SCH_MAX_PIPS do
         if self.gems_on[i]  then self.gems_on[i]:hide()  end
@@ -527,16 +598,18 @@ local function create_sch_panel(x, y)
     if sch_show_gems then self.bg:show() else self.bg:hide() end
 
     -- Gem pips
-    for i = 1, SCH_MAX_PIPS do
-      if sch_show_gems and i <= max and i <= cur then
+    for i = 1, max do
+      if sch_show_gems and i <= cur then
         self.gems_on[i]:show()
       else
         self.gems_on[i]:hide()
       end
       self.gems_off[i]:hide()
     end
-
-
+    for i = max + 1, SCH_MAX_PIPS do
+      self.gems_on[i]:hide()
+      self.gems_off[i]:hide()
+    end
 
   end
 
