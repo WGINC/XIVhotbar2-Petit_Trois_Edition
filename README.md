@@ -11,4 +11,10 @@ It will all be described more thouroughly at a later date, however, the new comm
 
 //htb set <row> <slot> <type> <action> [target] [alias]: Manually tweaks everything about an action on the hotbar
 
+//htb sch a11y colorblind/grayscale/off: Toggles between accessibility modes for the scholar job gauge
+
+//htb sch gauge(to turn the whole gauge off)/gems/dagger/sublim/strats: Toggles the respective parts of the job gauge
+
+(NOTE: if you turn off gems, each other part of the gauge may be moved around independently. The component positions are then saved in settings so don't worry about fusing them all back together again.)
+
 Content Warning: Having looked for artists and found none willing, I do have to admit that (ideally temporarily), the art for the three current job gauges (RUN, SCH, and COR) is AI generated.
